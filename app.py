@@ -13,7 +13,7 @@ from datetime import datetime
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="自動對帳系統", page_icon="📊", layout="wide")
-st.title("📊 自動對帳系統 (智慧容錯版)")
+st.title("📊 自動對帳系統 (最終對應版)")
 
 # 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
@@ -143,7 +143,7 @@ def process_car_wash(file_a, file_b):
         return None, [f"❌ 錯誤: {str(e)}"]
 
 # ==========================================
-# 🔵 功能 B：LiTV 對帳邏輯 (終極容錯版)
+# 🔵 功能 B：LiTV 對帳邏輯 (超級欄位對應版)
 # ==========================================
 def process_litv(file_a, file_b):
     output = io.BytesIO()
@@ -172,32 +172,41 @@ def process_litv(file_a, file_b):
             df_a = pd.read_excel(file_a, header=0)
             df_a.columns = df_a.columns.str.strip()
         
-        # [STEP 3] 欄位相容性檢查 (自動補齊缺失欄位)
+        # [STEP 3] 超級欄位名稱對應 (處理所有可能的名稱變異)
         
-        # 3.1 方案金額 -> 金額
+        # 3.1 金額對應
         if '方案金額' in df_a.columns:
             df_a.rename(columns={'方案金額': '金額'}, inplace=True)
-            logs.append("💡 自動修正：方案金額 -> 金額")
+            logs.append("💡 對應：方案金額 -> 金額")
 
-        # 3.2 退款日期 -> 退款時間
+        # 3.2 方案(SKU) 對應 - 這是您剛剛報錯的地方
+        if '方案' in df_a.columns:
+            df_a.rename(columns={'方案': '方案(SKU)'}, inplace=True)
+            logs.append("💡 對應：方案 -> 方案(SKU)")
+        elif 'SKU' in df_a.columns:
+            df_a.rename(columns={'SKU': '方案(SKU)'}, inplace=True)
+            logs.append("💡 對應：SKU -> 方案(SKU)")
+
+        # 3.3 退款時間對應
         if '退款日期' in df_a.columns:
             df_a.rename(columns={'退款日期': '退款時間'}, inplace=True)
-            logs.append("💡 自動修正：退款日期 -> 退款時間")
+            logs.append("💡 對應：退款日期 -> 退款時間")
 
-        # 3.3 補齊「退款時間」 (避免 KeyError)
-        # 你的 B 表有退款時間，但這裡處理的是 A 表。如果 A 表沒有，我們就假設沒有退款，補上空值讓程式跑完。
+        # 3.4 補齊缺失欄位 (防呆)
         if '退款時間' not in df_a.columns:
             df_a['退款時間'] = np.nan
-            logs.append("⚠️ 警告：A表找不到「退款時間」欄位，已自動補上空白欄位以防當機。")
+            logs.append("⚠️ 警告：A表無「退款時間」，已自動補空白。")
             
-        # 3.4 補齊「手機號碼」
         if '手機號碼' not in df_a.columns:
             df_a['手機號碼'] = np.nan
-            logs.append("❌ 警告：A表找不到「手機號碼」欄位，可能導致比對失敗。")
+            logs.append("❌ 警告：A表無「手機號碼」，可能會影響比對。")
 
-        # 3.5 補齊「金額」
+        # 3.5 最終必要檢查
         if '金額' not in df_a.columns:
-             return None, [f"❌ 嚴重錯誤：A表找不到「金額」或「方案金額」欄位。", f"目前讀到的 A 表欄位: {list(df_a.columns)}"], None, None
+             return None, [f"❌ 嚴重錯誤：找不到「金額」欄位。", f"讀到的欄位: {list(df_a.columns)}"], None, None
+        
+        if '方案(SKU)' not in df_a.columns:
+             return None, [f"❌ 嚴重錯誤：找不到「方案」或「方案(SKU)」欄位。", f"讀到的欄位: {list(df_a.columns)}"], None, None
 
         # --- 以下為標準邏輯 (維持不變) ---
         df_a['金額'] = pd.to_numeric(df_a['金額'], errors='coerce').fillna(0)
