@@ -384,11 +384,11 @@ if mode == "🚗 洗車對帳 (Code A)":
     
     with col1:
         # 使用 Markdown 自訂大字體標題
-        st.markdown("<h3 style='text-align: center; color: #E74C3C;'>1. 廠商報表 (A表位置 -> Logic B)</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='text-align: center; color: #E74C3C;'>1. CMX報表 (A表)</h3>", unsafe_allow_html=True)
         file_supplier = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_supplier", label_visibility="collapsed")
     
     with col2:
-        st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2. 請款明細 (B表位置 -> Logic A)</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2. LiTV請款明細 (B表)</h3>", unsafe_allow_html=True)
         file_billing = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_billing", label_visibility="collapsed")
     
     if st.button("🚀 開始洗車對帳", type="primary"):
@@ -416,11 +416,11 @@ elif mode == "📺 LiTV 對帳 (Code B)":
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("<h3 style='text-align: center; color: #E74C3C;'>1. 廠商報表 (A表)</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='text-align: center; color: #E74C3C;'>1. CMX報表 (A表)</h3>", unsafe_allow_html=True)
         file_a = st.file_uploader(" ", type=['xlsx', 'xls'], key="litv_a", label_visibility="collapsed")
     
     with col2:
-        st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2. CMX 對帳單 (B表)</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2. TMS對帳單 (B表)</h3>", unsafe_allow_html=True)
         file_b = st.file_uploader(" ", type=['xlsx', 'xls'], key="litv_b", label_visibility="collapsed")
     
     if st.button("🚀 開始 LiTV 對帳", type="primary"):
