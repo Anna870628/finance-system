@@ -146,46 +146,71 @@ def process_car_wash(file_a, file_b):
         return None, [f"❌ 錯誤: {str(e)}"]
 
 # ==========================================
-# 🔵 功能 B：LiTV 對帳邏輯 (修正：相容「金額」與「方案金額」)
+# 🔵 功能 B：LiTV 對帳邏輯 (修正：優先使用 header=2)
 # ==========================================
 def process_litv(file_a, file_b):
     output = io.BytesIO()
     logs = []
 
     try:
-        # 1. 複製 B 表作為基底 (在記憶體中操作)
+        # 1. 複製 B 表作為基底
         file_b_bytes = io.BytesIO(file_b.getvalue())
         wb = openpyxl.load_workbook(file_b_bytes)
         
-        # 2. 處理報表 A (自動尋找標題列，解決 KeyError 問題)
-        logs.append("正在讀取 A 表並搜尋標題列...")
+        # 2. 處理報表 A (雙重策略：優先 header=2，失敗才搜尋)
+        logs.append("正在讀取 A 表...")
         
-        # 預讀前 20 行找標題
-        df_temp = pd.read_excel(file_a, header=None, nrows=20)
-        header_idx = -1
+        # --- 策略 1: 直接嘗試使用 header=2 (仿照原本成功的程式碼) ---
+        success = False
+        df_a = None
         
-        # 修正：同時尋找 '金額' 或 '方案金額'
-        for i, row in df_temp.iterrows():
-            row_str = " ".join([str(x).strip() for x in row.values])
-            if '訂單編號' in row_str and ('金額' in row_str or '方案金額' in row_str):
-                header_idx = i
-                break
-        
-        if header_idx == -1:
-            return None, ["❌ 錯誤：在 A 表中找不到「訂單編號」或「金額 / 方案金額」欄位，請確認檔案格式。"], None, None
+        try:
+            # 必須先回到檔案開頭，因為這可能是第二次讀取
+            file_a.seek(0)
+            df_temp = pd.read_excel(file_a, header=2)
+            df_temp.columns = df_temp.columns.str.strip()
+            
+            # 檢查關鍵欄位是否存在
+            if '訂單編號' in df_temp.columns and ('金額' in df_temp.columns or '方案金額' in df_temp.columns):
+                df_a = df_temp
+                success = True
+                logs.append("✅ 成功使用預設格式 (第3行當標題) 讀取資料。")
+        except Exception:
+            pass # 如果失敗，就繼續執行策略 2
 
-        # 正式讀取 A 表
-        df_a = pd.read_excel(file_a, header=header_idx)
-        df_a.columns = df_a.columns.str.strip() # 去空白
-        
-        # 修正：如果欄位叫做 '方案金額'，將其改名為 '金額' 以便後續處理
+        # --- 策略 2: 如果策略 1 失敗，嘗試自動搜尋 ---
+        if not success:
+            logs.append("⚠️ 預設格式讀取失敗，嘗試自動搜尋標題列...")
+            file_a.seek(0) # 重置檔案指標
+            df_raw = pd.read_excel(file_a, header=None, nrows=20)
+            header_idx = -1
+            
+            for i, row in df_raw.iterrows():
+                row_str = " ".join([str(x).strip() for x in row.values])
+                if '訂單編號' in row_str and ('金額' in row_str or '方案金額' in row_str):
+                    header_idx = i
+                    break
+            
+            if header_idx != -1:
+                file_a.seek(0)
+                df_a = pd.read_excel(file_a, header=header_idx)
+                df_a.columns = df_a.columns.str.strip()
+                success = True
+                logs.append(f"✅ 自動搜尋成功：在第 {header_idx+1} 行找到標題。")
+
+        # --- 如果都失敗 ---
+        if not success or df_a is None:
+             return None, ["❌ 錯誤：無法讀取 A 表。請確認第 3 行是否為標題，且包含「訂單編號」與「金額」欄位。"], None, None
+
+        # --- 欄位名稱標準化 ---
         if '方案金額' in df_a.columns:
             df_a.rename(columns={'方案金額': '金額'}, inplace=True)
-            logs.append("💡 提示：偵測到「方案金額」欄位，已自動視為「金額」處理。")
             
-        # 再次檢查確保欄位存在
-        if '金額' not in df_a.columns:
-            return None, [f"❌ 錯誤：雖然找到標題列，但找不到「金額」欄位。目前欄位有：{list(df_a.columns)}"], None, None
+        # 再次確認欄位 (雙重保險)
+        required_cols = ['訂單編號', '金額', '手機號碼', '退款時間', '方案(SKU)']
+        missing = [c for c in required_cols if c not in df_a.columns]
+        if missing:
+             return None, [f"❌ 錯誤：雖然讀取成功，但缺少以下欄位: {missing}"], None, None
 
         df_a['金額'] = pd.to_numeric(df_a['金額'], errors='coerce').fillna(0)
 
@@ -209,6 +234,8 @@ def process_litv(file_a, file_b):
         # 3. 處理報表 B (ACG對帳明細)
         logs.append("正在處理 B 表 (ACG對帳明細)...")
         # 重新從原始檔讀取資料供 pandas 使用
+        # 注意：Streamlit 的 UploadedFile 需要重置指標
+        file_b.seek(0) 
         df_b_acg_full = pd.read_excel(file_b, sheet_name='ACG對帳明細')
         df_b_acg_full.columns = df_b_acg_full.columns.str.strip()
 
@@ -331,7 +358,6 @@ if mode == "🚗 洗車對帳 (Code A)":
 
 elif mode == "📺 LiTV 對帳 (Code B)":
     st.header("📺 LiTV 訂單對帳")
-    st.info("💡 系統會自動搜尋標題列，無需手動調整。")
     
     col1, col2 = st.columns(2)
     file_a = col1.file_uploader("上傳 A 表 (report_supplier...)", type=['xlsx', 'xls'])
