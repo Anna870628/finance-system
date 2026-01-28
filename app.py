@@ -13,61 +13,31 @@ from datetime import datetime
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="自動對帳系統", page_icon="📊", layout="wide")
-st.title("📊 自動對帳系統 (智慧分頁偵測版)")
+st.title("📊 自動對帳系統 (智慧相容版)")
 
 # 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
 
 # ==========================================
-# 🔴 功能 A：洗車對帳邏輯 (新增：智慧分頁偵測)
+# 🔴 功能 A：洗車對帳邏輯 (維持不變)
 # ==========================================
 def process_car_wash(file_a, file_b):
     output = io.BytesIO()
     logs = []
 
     try:
+        sheet_name_billing = '請款'
+        sheet_name_details = '累計明細'
         col_id = '訂單編號'
         col_plate = '車牌'
         col_refund = '退款時間'
         col_phone = '手機號碼'
         target_month_str = datetime.now().strftime("%Y/%m")
 
-        logs.append(f"📂 正在讀取 A 表...")
+        logs.append(f"📂 正在讀取檔案...")
         xls_a = pd.ExcelFile(file_a)
-        all_sheets = xls_a.sheet_names
-        logs.append(f"ℹ️ A 表包含分頁: {all_sheets}")
 
-        # --- [智慧偵測 1] 尋找「請款」分頁 ---
-        sheet_name_billing = '請款'
-        if sheet_name_billing not in all_sheets:
-            # 嘗試找包含 '請款' 的分頁
-            candidate = next((s for s in all_sheets if '請款' in s), None)
-            if candidate:
-                sheet_name_billing = candidate
-                logs.append(f"⚠️ 找不到「請款」分頁，自動改用包含關鍵字的：「{sheet_name_billing}」")
-            else:
-                # 真的找不到，就用第 1 個分頁
-                sheet_name_billing = all_sheets[0]
-                logs.append(f"⚠️ 完全找不到請款相關分頁，強制使用第 1 個分頁：「{sheet_name_billing}」")
-
-        # --- [智慧偵測 2] 尋找「累計明細」分頁 ---
-        sheet_name_details = '累計明細'
-        if sheet_name_details not in all_sheets:
-            # 嘗試找包含 '明細' 的分頁
-            candidate = next((s for s in all_sheets if '明細' in s), None)
-            if candidate:
-                sheet_name_details = candidate
-                logs.append(f"⚠️ 找不到「累計明細」分頁，自動改用：「{sheet_name_details}」")
-            else:
-                # 嘗試使用第 2 個分頁 (如果有的話)
-                if len(all_sheets) > 1:
-                    sheet_name_details = all_sheets[1]
-                    logs.append(f"⚠️ 找不到明細分頁，嘗試使用第 2 個分頁：「{sheet_name_details}」")
-                else:
-                    sheet_name_details = all_sheets[0] # 只有一個分頁時只好也用它
-                    logs.append(f"⚠️ 檔案只有一個分頁，明細資料也將讀取：「{sheet_name_details}」")
-
-        # 1. 讀取 A 表 (請款)
+        # 自動找標題 (洗車專用)
         df_temp = pd.read_excel(xls_a, sheet_name=sheet_name_billing, header=None, usecols="A:E", nrows=20)
         header_row_idx = 2
         for i, row in df_temp.iterrows():
@@ -91,8 +61,7 @@ def process_car_wash(file_a, file_b):
             df_daily[col_date] = pd.to_datetime(df_daily[col_date], errors='coerce').dt.strftime('%Y-%m-%d')
             df_daily = df_daily.dropna(subset=[col_date])
 
-        # 2. 準備 A 表詳細資料
-        logs.append(f"📖 讀取明細資料 (來源: {sheet_name_details})...")
+        # A 表詳細
         df_details = pd.read_excel(xls_a, sheet_name=sheet_name_details)
         df_a = df_details.dropna(subset=[col_id]).copy()
         df_a[col_id] = df_a[col_id].astype(str).str.strip()
@@ -105,8 +74,7 @@ def process_car_wash(file_a, file_b):
             df_a[col_phone] = df_a[col_phone].astype(str).str.strip()
         df_a = df_a.drop_duplicates(subset=[col_id, col_plate])
 
-        # 3. 準備 B 表
-        logs.append("📂 正在讀取 B 表...")
+        # B 表詳細
         if hasattr(file_b, 'seek'): file_b.seek(0)
         df_b_original = pd.read_excel(file_b, sheet_name=0, header=2)
         df_b_processing = df_b_original.copy()
@@ -126,7 +94,7 @@ def process_car_wash(file_a, file_b):
             df_b[col_phone] = df_b[col_phone].astype(str).str.strip()
         df_b = df_b.drop_duplicates(subset=[col_id, col_plate])
 
-        # 4. 合併
+        # 合併
         cols_keep = [col_id, col_plate, col_phone]
         df_total = pd.merge(
             df_a[cols_keep], df_b[cols_keep],
@@ -135,7 +103,7 @@ def process_car_wash(file_a, file_b):
 
         logs.append(f"✅ 對帳完成: A表有效筆數 {int(val_count)}, B表退款筆數 {len(df_b_refunds)}")
 
-        # 5. 寫入 Excel
+        # 寫入 Excel
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             wb = writer.book
             fmt_header = wb.add_format({'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 'align': 'center'})
@@ -172,8 +140,7 @@ def process_car_wash(file_a, file_b):
         return output.getvalue(), logs
 
     except Exception as e:
-        import traceback
-        return None, [f"❌ 錯誤: {str(e)}", f"詳細錯誤: {traceback.format_exc()}"]
+        return None, [f"❌ 錯誤: {str(e)}"]
 
 # ==========================================
 # 🔵 功能 B：LiTV 對帳邏輯 (智慧容錯版)
@@ -196,22 +163,24 @@ def process_litv(file_a, file_b):
             df_a = pd.read_excel(file_a, header=2)
             df_a.columns = df_a.columns.str.strip()
         except:
-            df_a = pd.DataFrame() 
+            df_a = pd.DataFrame() # 讀取失敗就給空
 
         # [STEP 2] 檢查是否讀到正確欄位
+        # 如果找不到 '金額' 且找不到 '方案金額'，代表 header=2 是錯的 (可能這份檔案 header 在第 0 行)
         if '金額' not in df_a.columns and '方案金額' not in df_a.columns:
             logs.append("⚠️ 原始設定 (header=2) 找不到金額欄位，嘗試切換為標準格式 (header=0)...")
             file_a.seek(0)
             df_a = pd.read_excel(file_a, header=0)
             df_a.columns = df_a.columns.str.strip()
         
-        # [STEP 3] 欄位名稱校正
+        # [STEP 3] 欄位名稱校正 (把 '方案金額' 改成 '金額')
         if '方案金額' in df_a.columns:
             df_a.rename(columns={'方案金額': '金額'}, inplace=True)
             logs.append("💡 將「方案金額」視為「金額」。")
             
         # [STEP 4] 最終檢查
         if '金額' not in df_a.columns:
+            # 還是找不到，報錯並列出所有欄位讓你知道發生什麼事
             return None, [f"❌ 嚴重錯誤：找不到「金額」欄位。", f"讀到的欄位有：{list(df_a.columns)}"], None, None
 
         # --- 以下完全是你原本的邏輯 ---
@@ -326,8 +295,7 @@ def process_litv(file_a, file_b):
         return output.getvalue(), logs, diff_a_not_b, diff_b_not_a
 
     except Exception as e:
-        import traceback
-        return None, [f"❌ 錯誤: {str(e)}", f"詳細錯誤: {traceback.format_exc()}"]
+        return None, [f"❌ 嚴重錯誤: {str(e)}"], None, None
 
 # ==========================================
 # 介面顯示邏輯
