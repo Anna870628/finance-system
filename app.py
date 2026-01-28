@@ -324,4 +324,31 @@ elif mode == "📺 LiTV 對帳 (Code B)":
     
     col1, col2 = st.columns(2)
     file_a = col1.file_uploader("上傳 A 表 (report_supplier...)", type=['xlsx', 'xls'])
-    file_b = col
+    file_b = col2.file_uploader("上傳 B 表 (車美仕對帳單...)", type=['xlsx', 'xls'])
+    
+    if st.button("開始對帳", type="primary"):
+        if file_a and file_b:
+            with st.spinner("比對資料中..."):
+                result, logs, diff_a, diff_b = process_litv(file_a, file_b)
+            
+            with st.expander("查看執行紀錄", expanded=True):
+                for l in logs:
+                    st.text(l)
+            
+            if result:
+                st.success("成功！")
+                c1, c2 = st.columns(2)
+                c1.error(f"A有B無 (共 {len(diff_a) if diff_a else 0} 筆)")
+                if diff_a: c1.dataframe(pd.DataFrame(diff_a))
+                
+                c2.warning(f"B有A無 (共 {len(diff_b) if diff_b else 0} 筆)")
+                if diff_b: c2.dataframe(pd.DataFrame(diff_b))
+                
+                st.download_button(
+                    label="📥 下載 LiTV 對帳結果",
+                    data=result,
+                    file_name=f"LiTV_對帳_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            st.warning("⚠️ 請確認兩個檔案都已上傳。")
