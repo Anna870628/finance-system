@@ -13,7 +13,7 @@ from datetime import datetime
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="自動對帳系統", page_icon="📊", layout="wide")
-st.title("📊 自動對帳系統 (智慧相容版)")
+st.title("📊 自動對帳系統 (智慧容錯版)")
 
 # 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
@@ -143,7 +143,7 @@ def process_car_wash(file_a, file_b):
         return None, [f"❌ 錯誤: {str(e)}"]
 
 # ==========================================
-# 🔵 功能 B：LiTV 對帳邏輯 (智慧容錯版)
+# 🔵 功能 B：LiTV 對帳邏輯 (終極容錯版)
 # ==========================================
 def process_litv(file_a, file_b):
     output = io.BytesIO()
@@ -154,36 +154,52 @@ def process_litv(file_a, file_b):
         file_b_bytes = io.BytesIO(file_b.getvalue())
         wb = openpyxl.load_workbook(file_b_bytes)
         
-        # --- 2. 處理報表 A (智慧讀取) ---
+        # --- 2. 處理報表 A ---
         logs.append("正在讀取 A 表...")
         file_a.seek(0)
         
-        # [STEP 1] 先試你原本的 header=2
+        # [STEP 1] 嘗試 header=2
         try:
             df_a = pd.read_excel(file_a, header=2)
             df_a.columns = df_a.columns.str.strip()
         except:
-            df_a = pd.DataFrame() # 讀取失敗就給空
+            df_a = pd.DataFrame()
 
-        # [STEP 2] 檢查是否讀到正確欄位
-        # 如果找不到 '金額' 且找不到 '方案金額'，代表 header=2 是錯的 (可能這份檔案 header 在第 0 行)
+        # [STEP 2] 如果 header=2 讀不到金額，嘗試 header=0
         if '金額' not in df_a.columns and '方案金額' not in df_a.columns:
-            logs.append("⚠️ 原始設定 (header=2) 找不到金額欄位，嘗試切換為標準格式 (header=0)...")
+            logs.append("⚠️ header=2 找不到金額，切換為 header=0 讀取...")
             file_a.seek(0)
             df_a = pd.read_excel(file_a, header=0)
             df_a.columns = df_a.columns.str.strip()
         
-        # [STEP 3] 欄位名稱校正 (把 '方案金額' 改成 '金額')
+        # [STEP 3] 欄位相容性檢查 (自動補齊缺失欄位)
+        
+        # 3.1 方案金額 -> 金額
         if '方案金額' in df_a.columns:
             df_a.rename(columns={'方案金額': '金額'}, inplace=True)
-            logs.append("💡 將「方案金額」視為「金額」。")
-            
-        # [STEP 4] 最終檢查
-        if '金額' not in df_a.columns:
-            # 還是找不到，報錯並列出所有欄位讓你知道發生什麼事
-            return None, [f"❌ 嚴重錯誤：找不到「金額」欄位。", f"讀到的欄位有：{list(df_a.columns)}"], None, None
+            logs.append("💡 自動修正：方案金額 -> 金額")
 
-        # --- 以下完全是你原本的邏輯 ---
+        # 3.2 退款日期 -> 退款時間
+        if '退款日期' in df_a.columns:
+            df_a.rename(columns={'退款日期': '退款時間'}, inplace=True)
+            logs.append("💡 自動修正：退款日期 -> 退款時間")
+
+        # 3.3 補齊「退款時間」 (避免 KeyError)
+        # 你的 B 表有退款時間，但這裡處理的是 A 表。如果 A 表沒有，我們就假設沒有退款，補上空值讓程式跑完。
+        if '退款時間' not in df_a.columns:
+            df_a['退款時間'] = np.nan
+            logs.append("⚠️ 警告：A表找不到「退款時間」欄位，已自動補上空白欄位以防當機。")
+            
+        # 3.4 補齊「手機號碼」
+        if '手機號碼' not in df_a.columns:
+            df_a['手機號碼'] = np.nan
+            logs.append("❌ 警告：A表找不到「手機號碼」欄位，可能導致比對失敗。")
+
+        # 3.5 補齊「金額」
+        if '金額' not in df_a.columns:
+             return None, [f"❌ 嚴重錯誤：A表找不到「金額」或「方案金額」欄位。", f"目前讀到的 A 表欄位: {list(df_a.columns)}"], None, None
+
+        # --- 以下為標準邏輯 (維持不變) ---
         df_a['金額'] = pd.to_numeric(df_a['金額'], errors='coerce').fillna(0)
 
         df_a_filtered = df_a[
