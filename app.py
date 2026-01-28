@@ -146,47 +146,54 @@ def process_car_wash(file_a, file_b):
         return None, [f"❌ 錯誤: {str(e)}"]
 
 # ==========================================
-# 🔵 功能 B：LiTV 對帳邏輯 (修正：優先使用 header=2)
+# 🔵 功能 B：LiTV 對帳邏輯 (強力診斷版)
 # ==========================================
 def process_litv(file_a, file_b):
     output = io.BytesIO()
     logs = []
 
     try:
-        # 1. 複製 B 表作為基底
+        # 1. 複製 B 表 (記憶體操作)
         file_b_bytes = io.BytesIO(file_b.getvalue())
         wb = openpyxl.load_workbook(file_b_bytes)
         
-        # 2. 處理報表 A (雙重策略：優先 header=2，失敗才搜尋)
+        # 2. 處理報表 A
         logs.append("正在讀取 A 表...")
-        
-        # --- 策略 1: 直接嘗試使用 header=2 (仿照原本成功的程式碼) ---
-        success = False
         df_a = None
         
+        # --- 方法 1: 強制使用 header=2 (仿照原始碼) ---
         try:
-            # 必須先回到檔案開頭，因為這可能是第二次讀取
-            file_a.seek(0)
+            file_a.seek(0) # 絕對關鍵：重置指標
             df_temp = pd.read_excel(file_a, header=2)
-            df_temp.columns = df_temp.columns.str.strip()
             
-            # 檢查關鍵欄位是否存在
-            if '訂單編號' in df_temp.columns and ('金額' in df_temp.columns or '方案金額' in df_temp.columns):
+            # 強力清洗欄位名稱：去除前後空白、去除換行
+            df_temp.columns = df_temp.columns.astype(str).str.strip().str.replace('\n', '')
+            
+            # 印出我們看到了什麼 (診斷用)
+            detected_cols = list(df_temp.columns)
+            logs.append(f"🔍 [方法1 header=2] 讀到的欄位: {detected_cols}")
+            
+            # 判斷是否可用
+            has_id = '訂單編號' in detected_cols
+            has_money = '金額' in detected_cols or '方案金額' in detected_cols
+            
+            if has_id and has_money:
                 df_a = df_temp
-                success = True
-                logs.append("✅ 成功使用預設格式 (第3行當標題) 讀取資料。")
-        except Exception:
-            pass # 如果失敗，就繼續執行策略 2
+                logs.append("✅ 成功使用 header=2 讀取。")
+            else:
+                logs.append("⚠️ header=2 讀取成功但欄位不對，嘗試自動搜尋...")
 
-        # --- 策略 2: 如果策略 1 失敗，嘗試自動搜尋 ---
-        if not success:
-            logs.append("⚠️ 預設格式讀取失敗，嘗試自動搜尋標題列...")
-            file_a.seek(0) # 重置檔案指標
+        except Exception as e:
+            logs.append(f"⚠️ header=2 讀取失敗: {e}")
+
+        # --- 方法 2: 如果方法 1 失敗，自動掃描前 20 行 ---
+        if df_a is None:
+            file_a.seek(0)
             df_raw = pd.read_excel(file_a, header=None, nrows=20)
             header_idx = -1
             
             for i, row in df_raw.iterrows():
-                row_str = " ".join([str(x).strip() for x in row.values])
+                row_str = "".join([str(x).strip() for x in row.values]) # 串接整列內容
                 if '訂單編號' in row_str and ('金額' in row_str or '方案金額' in row_str):
                     header_idx = i
                     break
@@ -194,24 +201,25 @@ def process_litv(file_a, file_b):
             if header_idx != -1:
                 file_a.seek(0)
                 df_a = pd.read_excel(file_a, header=header_idx)
-                df_a.columns = df_a.columns.str.strip()
-                success = True
-                logs.append(f"✅ 自動搜尋成功：在第 {header_idx+1} 行找到標題。")
+                df_a.columns = df_a.columns.astype(str).str.strip()
+                logs.append(f"✅ 自動搜尋：在第 {header_idx+1} 行找到標題。")
 
-        # --- 如果都失敗 ---
-        if not success or df_a is None:
-             return None, ["❌ 錯誤：無法讀取 A 表。請確認第 3 行是否為標題，且包含「訂單編號」與「金額」欄位。"], None, None
+        # --- 最終檢查 ---
+        if df_a is None:
+             return None, [f"❌ 錯誤：無法讀取 A 表。請檢查 log 看讀到了什麼欄位。", f"最後一次讀到的欄位: {detected_cols if 'detected_cols' in locals() else '無'}"], None, None
 
-        # --- 欄位名稱標準化 ---
+        # 欄位改名 (方案金額 -> 金額)
         if '方案金額' in df_a.columns:
             df_a.rename(columns={'方案金額': '金額'}, inplace=True)
-            
-        # 再次確認欄位 (雙重保險)
-        required_cols = ['訂單編號', '金額', '手機號碼', '退款時間', '方案(SKU)']
-        missing = [c for c in required_cols if c not in df_a.columns]
-        if missing:
-             return None, [f"❌ 錯誤：雖然讀取成功，但缺少以下欄位: {missing}"], None, None
+            logs.append("💡 將「方案金額」視為「金額」。")
 
+        # 再次檢查必要欄位
+        if '金額' not in df_a.columns or '訂單編號' not in df_a.columns:
+             return None, [f"❌ 嚴重錯誤：缺少必要欄位。\n目前欄位: {list(df_a.columns)}"], None, None
+
+        # ------------------
+        # 以下邏輯與原始碼相同
+        # ------------------
         df_a['金額'] = pd.to_numeric(df_a['金額'], errors='coerce').fillna(0)
 
         df_a_filtered = df_a[
@@ -231,11 +239,9 @@ def process_litv(file_a, file_b):
         df_a_filtered['方案(SKU)'] = df_a_filtered['方案(SKU)'].astype(str).str.strip()
         a_lookup_set = set(zip(df_a_filtered['手機隱碼'], df_a_filtered['方案(SKU)']))
 
-        # 3. 處理報表 B (ACG對帳明細)
-        logs.append("正在處理 B 表 (ACG對帳明細)...")
-        # 重新從原始檔讀取資料供 pandas 使用
-        # 注意：Streamlit 的 UploadedFile 需要重置指標
-        file_b.seek(0) 
+        # 3. 處理報表 B
+        logs.append("正在處理 B 表...")
+        file_b.seek(0)
         df_b_acg_full = pd.read_excel(file_b, sheet_name='ACG對帳明細')
         df_b_acg_full.columns = df_b_acg_full.columns.str.strip()
 
@@ -255,7 +261,7 @@ def process_litv(file_a, file_b):
         df_b_valid['廠商對帳key1'] = df_b_valid['廠商對帳key1'].astype(str).str.strip()
         b_lookup_set = set(zip(df_b_valid['手機/虛擬帳號'], df_b_valid['廠商對帳key1']))
 
-        # 4. 對帳與收集差異
+        # 4. 對帳
         sku_mapping = {'LiTV_LUX_1Y_OT': ['LiTV_LUX_1Y_OT', 'LiTV_LUX_F1MF_1Y_OT'], 'LiTV_LUX_1M_OT': ['LiTV_LUX_1M_OT']}
         reverse_sku_map = {'LiTV_LUX_F1MF_1Y_OT': 'LiTV_LUX_1Y_OT', 'LiTV_LUX_1Y_OT': 'LiTV_LUX_1Y_OT', 'LiTV_LUX_1M_OT': 'LiTV_LUX_1M_OT'}
 
@@ -291,10 +297,9 @@ def process_litv(file_a, file_b):
                 if (b_phone, equiv_sku) not in a_lookup_set:
                     diff_b_not_a.append({'手機/虛擬帳號': b_phone, '廠商對帳key1': b_key})
 
-        # 5. 修改 Excel (Openpyxl)
+        # 5. 寫入 Excel
         yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
 
-        # 新增分頁
         if "CMX對帳明細" in wb.sheetnames: del wb["CMX對帳明細"]
         ws_new = wb.create_sheet("CMX對帳明細", 0)
         headers = ['廠商方案代碼', '廠商方案名稱', '手機/虛擬帳號', '方案金額', 'CMX訂單編號']
@@ -304,23 +309,22 @@ def process_litv(file_a, file_b):
             if data['is_diff']:
                 for cell in ws_new[ws_new.max_row]: cell.fill = yellow_fill
 
-        # 標記 ACG對帳明細
-        ws_acg = wb['ACG對帳明細']
-        h_list = [cell.value for cell in ws_acg[1]]
-        
-        # 確保欄位存在
-        if '手機/虛擬帳號' in h_list and '廠商對帳key1' in h_list:
-            p_idx = h_list.index('手機/虛擬帳號') + 1
-            k_idx = h_list.index('廠商對帳key1') + 1
-            max_reconcile_row = (stop_idx + 1) if stop_idx is not None else ws_acg.max_row
+        if 'ACG對帳明細' in wb.sheetnames:
+            ws_acg = wb['ACG對帳明細']
+            h_list = [cell.value for cell in ws_acg[1]]
             
-            for r_idx in range(2, max_reconcile_row + 1):
-                p_val = str(ws_acg.cell(row=r_idx, column=p_idx).value).strip()
-                k_val = str(ws_acg.cell(row=r_idx, column=k_idx).value).strip()
-                if "*" in p_val:
-                    equiv_sku = reverse_sku_map.get(k_val, k_val)
-                    if (p_val, equiv_sku) not in a_lookup_set:
-                        for cell in ws_acg[r_idx]: cell.fill = yellow_fill
+            if '手機/虛擬帳號' in h_list and '廠商對帳key1' in h_list:
+                p_idx = h_list.index('手機/虛擬帳號') + 1
+                k_idx = h_list.index('廠商對帳key1') + 1
+                max_reconcile_row = (stop_idx + 1) if stop_idx is not None else ws_acg.max_row
+                
+                for r_idx in range(2, max_reconcile_row + 1):
+                    p_val = str(ws_acg.cell(row=r_idx, column=p_idx).value).strip()
+                    k_val = str(ws_acg.cell(row=r_idx, column=k_idx).value).strip()
+                    if "*" in p_val:
+                        equiv_sku = reverse_sku_map.get(k_val, k_val)
+                        if (p_val, equiv_sku) not in a_lookup_set:
+                            for cell in ws_acg[r_idx]: cell.fill = yellow_fill
 
         wb.save(output)
         logs.append(f"✅ 對帳完成: A有B無 {len(diff_a_not_b)} 筆，B有A無 {len(diff_b_not_a)} 筆")
@@ -368,7 +372,10 @@ elif mode == "📺 LiTV 對帳 (Code B)":
             with st.spinner("比對資料中..."):
                 result, logs, diff_a, diff_b = process_litv(file_a, file_b)
             
-            st.expander("查看執行紀錄", expanded=True).write(logs)
+            # 自動展開紀錄，這樣你才看得到診斷訊息
+            with st.expander("查看執行紀錄", expanded=True):
+                for l in logs:
+                    st.text(l)
             
             if result:
                 st.success("成功！")
