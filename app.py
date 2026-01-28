@@ -19,7 +19,7 @@ st.title("📊 自動對帳系統 (整合版)")
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
 
 # ==========================================
-# 🔴 功能 A：洗車對帳邏輯
+# 🔴 功能 A：洗車對帳邏輯 (維持不變)
 # ==========================================
 def process_car_wash(file_a, file_b):
     output = io.BytesIO()
@@ -37,7 +37,7 @@ def process_car_wash(file_a, file_b):
         logs.append(f"📂 正在讀取檔案...")
         xls_a = pd.ExcelFile(file_a)
 
-        # 1. 讀取 A 表 (請款)
+        # 自動找標題 (洗車專用)
         df_temp = pd.read_excel(xls_a, sheet_name=sheet_name_billing, header=None, usecols="A:E", nrows=20)
         header_row_idx = 2
         for i, row in df_temp.iterrows():
@@ -61,7 +61,7 @@ def process_car_wash(file_a, file_b):
             df_daily[col_date] = pd.to_datetime(df_daily[col_date], errors='coerce').dt.strftime('%Y-%m-%d')
             df_daily = df_daily.dropna(subset=[col_date])
 
-        # 2. 準備 A 表詳細資料
+        # A 表詳細
         df_details = pd.read_excel(xls_a, sheet_name=sheet_name_details)
         df_a = df_details.dropna(subset=[col_id]).copy()
         df_a[col_id] = df_a[col_id].astype(str).str.strip()
@@ -74,7 +74,7 @@ def process_car_wash(file_a, file_b):
             df_a[col_phone] = df_a[col_phone].astype(str).str.strip()
         df_a = df_a.drop_duplicates(subset=[col_id, col_plate])
 
-        # 3. 準備 B 表
+        # B 表詳細
         df_b_original = pd.read_excel(file_b, sheet_name=0, header=2)
         df_b_processing = df_b_original.copy()
         df_b_refunds = pd.DataFrame()
@@ -93,7 +93,7 @@ def process_car_wash(file_a, file_b):
             df_b[col_phone] = df_b[col_phone].astype(str).str.strip()
         df_b = df_b.drop_duplicates(subset=[col_id, col_plate])
 
-        # 4. 合併
+        # 合併
         cols_keep = [col_id, col_plate, col_phone]
         df_total = pd.merge(
             df_a[cols_keep], df_b[cols_keep],
@@ -102,7 +102,7 @@ def process_car_wash(file_a, file_b):
 
         logs.append(f"✅ 對帳完成: A表有效筆數 {int(val_count)}, B表退款筆數 {len(df_b_refunds)}")
 
-        # 5. 寫入 Excel
+        # 寫入 Excel
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             wb = writer.book
             fmt_header = wb.add_format({'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 'align': 'center'})
@@ -142,60 +142,46 @@ def process_car_wash(file_a, file_b):
         return None, [f"❌ 錯誤: {str(e)}"]
 
 # ==========================================
-# 🔵 功能 B：LiTV 對帳邏輯 (雷達掃描修正版)
+# 🔵 功能 B：LiTV 對帳邏輯 (完全復刻原版邏輯)
 # ==========================================
 def process_litv(file_a, file_b):
     output = io.BytesIO()
     logs = []
 
     try:
-        # 1. 準備 B 表
+        # --- 1. 複製 B 表作為基底 ---
+        # 原碼：shutil.copy(file_b_path, output_name)
+        # 轉換為 Streamlit 記憶體操作：
         file_b_bytes = io.BytesIO(file_b.getvalue())
         wb = openpyxl.load_workbook(file_b_bytes)
         
-        # 2. 處理報表 A (使用雷達掃描)
-        logs.append("正在掃描 A 表標題位置...")
+        # --- 2. 處理報表 A (比對基準) ---
+        logs.append("正在讀取 A 表 (使用 header=2)...")
+        
+        # 原碼：df_a = pd.read_excel(file_a_path, header=2)
         file_a.seek(0)
+        df_a = pd.read_excel(file_a, header=2)
         
-        # 先不帶 header 讀取前 20 行，當作純文字掃描
-        df_raw = pd.read_excel(file_a, header=None, nrows=20)
+        # 原碼：df_a.columns = df_a.columns.str.strip()
+        df_a.columns = df_a.columns.str.strip()
         
-        found_header_idx = -1
-        
-        # 逐行掃描
-        for i, row in df_raw.iterrows():
-            # 將這一行的所有格子串成一個字串 (例如: "訂單編號 方案金額 手機號碼")
-            row_text = " ".join([str(val).strip() for val in row.values])
-            
-            # 判斷條件：這一行必須同時包含 "訂單編號"
-            # 並且包含 ("金額" 或 "方案金額")
-            if '訂單編號' in row_text and ('金額' in row_text or '方案金額' in row_text):
-                found_header_idx = i
-                break
-        
-        if found_header_idx == -1:
-             # 如果找不到，印出前 5 行內容幫助除錯
-             debug_info = df_raw.head(5).to_string()
-             return None, [f"❌ 找不到標題列！程式在 A 表前 20 行都沒看到「訂單編號」。", f"前5行內容預覽:\n{debug_info}"], None, None
+        # 原碼：df_a['金額'] = pd.to_numeric(df_a['金額'], errors='coerce').fillna(0)
+        # 這裡加入一個簡單檢查，如果 user 檔案其實是 header=0，至少給個提示，而不是直接報錯
+        if '金額' not in df_a.columns:
+             # 如果 header=2 讀不到，嘗試 fallback 到 header=0 (為了容錯)
+             if '金額' not in df_a.columns and '方案金額' not in df_a.columns:
+                 # 嘗試讀取 header=0
+                 file_a.seek(0)
+                 df_a = pd.read_excel(file_a, header=0)
+                 df_a.columns = df_a.columns.str.strip()
+                 logs.append("⚠️ 注意：header=2 找不到金額欄位，已自動切換為 header=0 讀取。")
 
-        logs.append(f"✅ 在第 {found_header_idx + 1} 行找到標題，正在讀取資料...")
-        
-        # 用找到的 index 重新讀取
-        file_a.seek(0)
-        df_a = pd.read_excel(file_a, header=found_header_idx)
-        df_a.columns = df_a.columns.astype(str).str.strip().str.replace('\n', '') # 清洗標題
-
-        # 欄位改名
         if '方案金額' in df_a.columns:
             df_a.rename(columns={'方案金額': '金額'}, inplace=True)
             
-        # 再次確認
-        if '金額' not in df_a.columns:
-             return None, [f"❌ 欄位異常：雖然找到了標題行，但沒有「金額」欄位。", f"讀到的欄位: {list(df_a.columns)}"], None, None
-
-        # --- 以下邏輯不變 ---
         df_a['金額'] = pd.to_numeric(df_a['金額'], errors='coerce').fillna(0)
 
+        # 原碼篩選邏輯
         df_a_filtered = df_a[
             (df_a['金額'] > 0) &
             (df_a['退款時間'].isna()) &
@@ -213,12 +199,14 @@ def process_litv(file_a, file_b):
         df_a_filtered['方案(SKU)'] = df_a_filtered['方案(SKU)'].astype(str).str.strip()
         a_lookup_set = set(zip(df_a_filtered['手機隱碼'], df_a_filtered['方案(SKU)']))
 
-        # 3. 處理報表 B
-        logs.append("正在處理 B 表...")
+        # --- 3. 處理報表 B (ACG對帳明細) ---
+        logs.append("正在處理 B 表 (ACG對帳明細)...")
+        # 需重置 file_b 指標給 pandas 讀取
         file_b.seek(0)
         df_b_acg_full = pd.read_excel(file_b, sheet_name='ACG對帳明細')
         df_b_acg_full.columns = df_b_acg_full.columns.str.strip()
 
+        # 尋找「不計費」的行索引
         stop_idx = None
         for idx, val in enumerate(df_b_acg_full['編號']):
             if "不計費" in str(val):
@@ -235,7 +223,7 @@ def process_litv(file_a, file_b):
         df_b_valid['廠商對帳key1'] = df_b_valid['廠商對帳key1'].astype(str).str.strip()
         b_lookup_set = set(zip(df_b_valid['手機/虛擬帳號'], df_b_valid['廠商對帳key1']))
 
-        # 4. 對帳
+        # --- 4. 對帳與收集差異數據 ---
         sku_mapping = {'LiTV_LUX_1Y_OT': ['LiTV_LUX_1Y_OT', 'LiTV_LUX_F1MF_1Y_OT'], 'LiTV_LUX_1M_OT': ['LiTV_LUX_1M_OT']}
         reverse_sku_map = {'LiTV_LUX_F1MF_1Y_OT': 'LiTV_LUX_1Y_OT', 'LiTV_LUX_1Y_OT': 'LiTV_LUX_1Y_OT', 'LiTV_LUX_1M_OT': 'LiTV_LUX_1M_OT'}
 
@@ -271,9 +259,10 @@ def process_litv(file_a, file_b):
                 if (b_phone, equiv_sku) not in a_lookup_set:
                     diff_b_not_a.append({'手機/虛擬帳號': b_phone, '廠商對帳key1': b_key})
 
-        # 5. 寫入 Excel
+        # --- 6. 修改 Excel 標註 (Openpyxl) ---
         yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
 
+        # A. CMX對帳明細
         if "CMX對帳明細" in wb.sheetnames: del wb["CMX對帳明細"]
         ws_new = wb.create_sheet("CMX對帳明細", 0)
         headers = ['廠商方案代碼', '廠商方案名稱', '手機/虛擬帳號', '方案金額', 'CMX訂單編號']
@@ -283,13 +272,16 @@ def process_litv(file_a, file_b):
             if data['is_diff']:
                 for cell in ws_new[ws_new.max_row]: cell.fill = yellow_fill
 
+        # B. ACG對帳明細
         if 'ACG對帳明細' in wb.sheetnames:
             ws_acg = wb['ACG對帳明細']
             h_list = [cell.value for cell in ws_acg[1]]
             
+            # 確保欄位存在
             if '手機/虛擬帳號' in h_list and '廠商對帳key1' in h_list:
                 p_idx = h_list.index('手機/虛擬帳號') + 1
                 k_idx = h_list.index('廠商對帳key1') + 1
+                
                 max_reconcile_row = (stop_idx + 1) if stop_idx is not None else ws_acg.max_row
                 
                 for r_idx in range(2, max_reconcile_row + 1):
