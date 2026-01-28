@@ -299,6 +299,7 @@ def process_litv(file_a_upload, file_b_upload):
     except Exception as e:
         return None, [f"❌ 程式執行錯誤: {str(e)}"], None, None
 
+
 # ==========================================
 # 介面顯示邏輯
 # ==========================================
@@ -306,8 +307,9 @@ def process_litv(file_a_upload, file_b_upload):
 if mode == "🚗 洗車對帳 (Code A)":
     st.header("🚗 洗車訂單對帳")
     col1, col2 = st.columns(2)
-    file_a = col1.file_uploader("上傳 A 表 (請款明細)", type=['xlsx', 'xls'], key="car_a")
-    file_b = col2.file_uploader("上傳 B 表 (廠商報表)", type=['xlsx', 'xls'], key="car_b")
+    # 【修改處】這裡已經對調：左邊上傳 B 表，右邊上傳 A 表
+    file_b = col1.file_uploader("上傳 B 表 (廠商報表)", type=['xlsx', 'xls'], key="car_b")
+    file_a = col2.file_uploader("上傳 A 表 (請款明細)", type=['xlsx', 'xls'], key="car_a")
     
     if st.button("🚀 開始洗車對帳", type="primary"):
         if file_a and file_b:
