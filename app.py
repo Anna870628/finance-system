@@ -210,3 +210,150 @@ def process_litv(file_a, file_b):
         df_b_acg_full.columns = df_b_acg_full.columns.str.strip()
 
         stop_idx = None
+        for idx, val in enumerate(df_b_acg_full['編號']):
+            if "不計費" in str(val):
+                stop_idx = idx
+                break
+        
+        if stop_idx is not None:
+            df_b_valid = df_b_acg_full.iloc[:stop_idx].copy()
+        else:
+            df_b_valid = df_b_acg_full.copy()
+
+        df_b_valid = df_b_valid.dropna(subset=['手機/虛擬帳號', '廠商對帳key1']).copy()
+        df_b_valid['手機/虛擬帳號'] = df_b_valid['手機/虛擬帳號'].astype(str).str.strip()
+        df_b_valid['廠商對帳key1'] = df_b_valid['廠商對帳key1'].astype(str).str.strip()
+        b_lookup_set = set(zip(df_b_valid['手機/虛擬帳號'], df_b_valid['廠商對帳key1']))
+
+        # --- 4. 對帳 ---
+        sku_mapping = {'LiTV_LUX_1Y_OT': ['LiTV_LUX_1Y_OT', 'LiTV_LUX_F1MF_1Y_OT'], 'LiTV_LUX_1M_OT': ['LiTV_LUX_1M_OT']}
+        reverse_sku_map = {'LiTV_LUX_F1MF_1Y_OT': 'LiTV_LUX_1Y_OT', 'LiTV_LUX_1Y_OT': 'LiTV_LUX_1Y_OT', 'LiTV_LUX_1M_OT': 'LiTV_LUX_1M_OT'}
+
+        sheet1_data = []
+        diff_a_not_b = []
+
+        for _, row in df_a_filtered.iterrows():
+            sku_a = str(row['方案(SKU)']).strip()
+            phone_masked = row['手機隱碼']
+            possible_keys = sku_mapping.get(sku_a, [sku_a])
+            found_in_b = any((phone_masked, k) in b_lookup_set for k in possible_keys)
+
+            if sku_a == 'LiTV_LUX_1M_OT':
+                out_sku, out_amt, out_name = 'LiTV_LUX_1M_OT', 187, '豪華雙享餐/月繳/單次(定價$250)'
+            elif sku_a == 'LiTV_LUX_1Y_OT':
+                out_sku, out_amt, out_name = 'LiTV_LUX_F1MF_1Y_OT', 1717, '豪華雙享餐-首月免費/年繳/單次(定價$2,290)'
+            else:
+                out_sku, out_amt, out_name = sku_a, row['金額'], sku_a
+
+            sheet1_data.append({
+                '廠商方案代碼': out_sku, '廠商方案名稱': out_name, '手機/虛擬帳號': phone_masked,
+                '方案金額': out_amt, 'CMX訂單編號': row['訂單編號'], 'is_diff': not found_in_b
+            })
+
+            if not found_in_b:
+                diff_a_not_b.append({'手機號碼': row['手機全碼'], '方案': sku_a, '訂單編號': row['訂單編號']})
+
+        diff_b_not_a = []
+        for _, row in df_b_valid.iterrows():
+            b_phone, b_key = str(row['手機/虛擬帳號']).strip(), str(row['廠商對帳key1']).strip()
+            if "*" in b_phone:
+                equiv_sku = reverse_sku_map.get(b_key, b_key)
+                if (b_phone, equiv_sku) not in a_lookup_set:
+                    diff_b_not_a.append({'手機/虛擬帳號': b_phone, '廠商對帳key1': b_key})
+
+        # --- 6. 修改 Excel ---
+        yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+
+        if "CMX對帳明細" in wb.sheetnames: del wb["CMX對帳明細"]
+        ws_new = wb.create_sheet("CMX對帳明細", 0)
+        headers = ['廠商方案代碼', '廠商方案名稱', '手機/虛擬帳號', '方案金額', 'CMX訂單編號']
+        ws_new.append(headers)
+        for data in sheet1_data:
+            ws_new.append([data[h] for h in headers])
+            if data['is_diff']:
+                for cell in ws_new[ws_new.max_row]: cell.fill = yellow_fill
+
+        if 'ACG對帳明細' in wb.sheetnames:
+            ws_acg = wb['ACG對帳明細']
+            h_list = [cell.value for cell in ws_acg[1]]
+            
+            if '手機/虛擬帳號' in h_list and '廠商對帳key1' in h_list:
+                p_idx = h_list.index('手機/虛擬帳號') + 1
+                k_idx = h_list.index('廠商對帳key1') + 1
+                max_reconcile_row = (stop_idx + 1) if stop_idx is not None else ws_acg.max_row
+                
+                for r_idx in range(2, max_reconcile_row + 1):
+                    p_val = str(ws_acg.cell(row=r_idx, column=p_idx).value).strip()
+                    k_val = str(ws_acg.cell(row=r_idx, column=k_idx).value).strip()
+                    if "*" in p_val:
+                        equiv_sku = reverse_sku_map.get(k_val, k_val)
+                        if (p_val, equiv_sku) not in a_lookup_set:
+                            for cell in ws_acg[r_idx]: cell.fill = yellow_fill
+
+        wb.save(output)
+        logs.append(f"✅ 對帳完成: A有B無 {len(diff_a_not_b)} 筆，B有A無 {len(diff_b_not_a)} 筆")
+        return output.getvalue(), logs, diff_a_not_b, diff_b_not_a
+
+    except Exception as e:
+        return None, [f"❌ 嚴重錯誤: {str(e)}"], None, None
+
+# ==========================================
+# 介面顯示邏輯
+# ==========================================
+if mode == "🚗 洗車對帳 (Code A)":
+    st.header("🚗 洗車訂單對帳")
+    col1, col2 = st.columns(2)
+    file_a = col1.file_uploader("上傳 A 表 (請款明細)", type=['xlsx', 'xls'])
+    file_b = col2.file_uploader("上傳 B 表 (廠商報表)", type=['xlsx', 'xls'])
+    
+    if st.button("開始對帳", type="primary"):
+        if file_a and file_b:
+            with st.spinner("資料處理中..."):
+                result, logs = process_car_wash(file_a, file_b)
+            
+            st.expander("查看執行紀錄", expanded=True).write(logs)
+            
+            if result:
+                st.success("成功！請下載結果：")
+                st.download_button(
+                    label="📥 下載洗車對帳結果",
+                    data=result,
+                    file_name=f"洗車對帳_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            st.warning("⚠️ 請確認兩個檔案都已上傳。")
+
+elif mode == "📺 LiTV 對帳 (Code B)":
+    st.header("📺 LiTV 訂單對帳")
+    
+    col1, col2 = st.columns(2)
+    file_a = col1.file_uploader("上傳 A 表 (report_supplier...)", type=['xlsx', 'xls'])
+    file_b = col2.file_uploader("上傳 B 表 (車美仕對帳單...)", type=['xlsx', 'xls'])
+    
+    if st.button("開始對帳", type="primary"):
+        if file_a and file_b:
+            with st.spinner("比對資料中..."):
+                result, logs, diff_a, diff_b = process_litv(file_a, file_b)
+            
+            with st.expander("查看執行紀錄", expanded=True):
+                for l in logs:
+                    st.text(l)
+            
+            if result:
+                st.success("成功！")
+                c1, c2 = st.columns(2)
+                c1.error(f"A有B無 (共 {len(diff_a) if diff_a else 0} 筆)")
+                if diff_a: c1.dataframe(pd.DataFrame(diff_a))
+                
+                c2.warning(f"B有A無 (共 {len(diff_b) if diff_b else 0} 筆)")
+                if diff_b: c2.dataframe(pd.DataFrame(diff_b))
+                
+                st.download_button(
+                    label="📥 下載 LiTV 對帳結果",
+                    data=result,
+                    file_name=f"LiTV_對帳_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            st.warning("⚠️ 請確認兩個檔案都已上傳。")
