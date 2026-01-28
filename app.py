@@ -12,20 +12,49 @@ from datetime import datetime
 # ==========================================
 # 頁面基本設定
 # ==========================================
-st.set_page_config(page_title="自動對帳系統 (完整版)", page_icon="📊", layout="wide")
-st.title("📊 自動對帳系統 (完整版)")
+st.set_page_config(page_title="自動對帳系統 (全自動識別版)", page_icon="📊", layout="wide")
+st.title("📊 自動對帳系統 (全自動識別版)")
 
 # 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
 
 # ==========================================
-# 🚗 功能 A：洗車對帳邏輯 (維持不變)
+# 🚗 功能 A：洗車對帳邏輯 (加入自動識別)
 # ==========================================
-def process_car_wash(file_a, file_b):
+def process_car_wash(file_1, file_2):
     output = io.BytesIO()
     logs = []
 
     try:
+        # --- 0. 自動識別 A/B 表 ---
+        # 邏輯：檢查哪個檔案有 '請款' 或 '累計明細' 分頁，那個就是 A 表 (請款明細)
+        
+        xl_1 = pd.ExcelFile(file_1)
+        xl_2 = pd.ExcelFile(file_2)
+        
+        file_a_target = file_1
+        file_b_target = file_2
+        
+        # 檢查 file_2 是否其實是 A 表
+        is_2_billing = any(s in xl_2.sheet_names for s in ['請款', '累計明細'])
+        is_1_billing = any(s in xl_1.sheet_names for s in ['請款', '累計明細'])
+
+        if is_2_billing and not is_1_billing:
+            logs.append("💡 偵測到檔案位置相反，已自動交換 (File 2 是請款明細)。")
+            file_a_target = file_2
+            file_b_target = file_1
+        elif is_1_billing:
+            logs.append("✅ 檔案順序正確 (File 1 是請款明細)。")
+        else:
+            # 如果都找不到特徵，就假設順序是對的，但給個警告
+            logs.append("⚠️ 警告：無法自動識別請款明細 (找不到 '請款' 分頁)，將依預設順序處理。")
+
+        # 歸零指標 (重要)
+        if hasattr(file_a_target, 'seek'): file_a_target.seek(0)
+        if hasattr(file_b_target, 'seek'): file_b_target.seek(0)
+
+        # --- 開始標準處理邏輯 ---
+        
         sheet_name_billing = '請款'
         sheet_name_details = '累計明細'
         col_id = '訂單編號'
@@ -35,7 +64,7 @@ def process_car_wash(file_a, file_b):
         target_month_str = datetime.now().strftime("%Y/%m")
 
         logs.append(f"📂 正在讀取檔案...")
-        xls_a = pd.ExcelFile(file_a)
+        xls_a = pd.ExcelFile(file_a_target)
 
         # 1. 讀取 A 表 (請款) - 自動找標題
         df_temp = pd.read_excel(xls_a, sheet_name=sheet_name_billing, header=None, usecols="A:E", nrows=20)
@@ -75,8 +104,8 @@ def process_car_wash(file_a, file_b):
         df_a = df_a.drop_duplicates(subset=[col_id, col_plate])
 
         # 3. 準備 B 表
-        if hasattr(file_b, 'seek'): file_b.seek(0)
-        df_b_original = pd.read_excel(file_b, sheet_name=0, header=2)
+        if hasattr(file_b_target, 'seek'): file_b_target.seek(0)
+        df_b_original = pd.read_excel(file_b_target, sheet_name=0, header=2)
         df_b_processing = df_b_original.copy()
         df_b_refunds = pd.DataFrame()
         if col_refund in df_b_processing.columns:
@@ -143,7 +172,7 @@ def process_car_wash(file_a, file_b):
         return None, [f"❌ 錯誤: {str(e)}"]
 
 # ==========================================
-# 📺 功能 B：LiTV 對帳邏輯 (Colab 移植版 + 自動交換)
+# 📺 功能 B：LiTV 對帳邏輯 (自動識別交換)
 # ==========================================
 def process_litv(file_a_upload, file_b_upload):
     output_buffer = io.BytesIO()
@@ -151,7 +180,6 @@ def process_litv(file_a_upload, file_b_upload):
 
     try:
         # --- 0. 自動識別檔案順序 ---
-        # 檢查 B 表是否有 'ACG對帳明細'
         xl_a = pd.ExcelFile(file_a_upload)
         xl_b = pd.ExcelFile(file_b_upload)
         
@@ -181,7 +209,6 @@ def process_litv(file_a_upload, file_b_upload):
         df_a = pd.read_excel(file_a_target, header=2)
         df_a.columns = df_a.columns.str.strip()
         
-        # 簡單防呆：如果讀不到金額，提示錯誤
         if '金額' not in df_a.columns:
             return None, [f"❌ 錯誤：A 表讀不到「金額」欄位 (header=2)。\n讀到的欄位: {list(df_a.columns)}"], None, None
 
@@ -209,7 +236,6 @@ def process_litv(file_a_upload, file_b_upload):
         df_b_acg_full = pd.read_excel(file_b_target, sheet_name='ACG對帳明細')
         df_b_acg_full.columns = df_b_acg_full.columns.str.strip()
 
-        # 尋找「不計費」
         stop_idx = None
         for idx, val in enumerate(df_b_acg_full['編號']):
             if "不計費" in str(val):
@@ -306,10 +332,13 @@ def process_litv(file_a_upload, file_b_upload):
 
 if mode == "🚗 洗車對帳 (Code A)":
     st.header("🚗 洗車訂單對帳")
+    st.info("💡 系統會自動識別「請款明細」與「廠商報表」，您可以隨意上傳。")
     col1, col2 = st.columns(2)
-    # 【修改處】這裡已經對調：左邊上傳 B 表，右邊上傳 A 表
-    file_b = col1.file_uploader("上傳 B 表 (廠商報表)", type=['xlsx', 'xls'], key="car_b")
-    file_a = col2.file_uploader("上傳 A 表 (請款明細)", type=['xlsx', 'xls'], key="car_a")
+    
+    # 這裡依照您的需求：左A (請款) / 右B (廠商)
+    # 但因為有自動識別，就算使用者丟反了也沒關係
+    file_a = col1.file_uploader("1. 請款明細 (A表)", type=['xlsx', 'xls'], key="car_a")
+    file_b = col2.file_uploader("2. 廠商報表 (B表)", type=['xlsx', 'xls'], key="car_b")
     
     if st.button("🚀 開始洗車對帳", type="primary"):
         if file_a and file_b:
@@ -330,7 +359,7 @@ if mode == "🚗 洗車對帳 (Code A)":
             st.warning("⚠️ 請確認兩個檔案都已上傳。")
 
 elif mode == "📺 LiTV 對帳 (Code B)":
-    st.header("📺 LiTV 訂單對帳 (原版邏輯)")
+    st.header("📺 LiTV 訂單對帳")
     st.info("💡 邏輯：A表讀 header=2，B表找 ACG對帳明細 (支援自動檔案交換)")
     
     col1, col2 = st.columns(2)
