@@ -155,3 +155,87 @@ def process_litv(file_a_upload, file_b_upload):
 
         # --- 6. 修改 Excel 標註 ---
         logs.append("正在寫入 Excel...")
+        yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+
+        # A. CMX對帳明細 (新增分頁)
+        if "CMX對帳明細" in wb.sheetnames: del wb["CMX對帳明細"]
+        ws_new = wb.create_sheet("CMX對帳明細", 0)
+        headers = ['廠商方案代碼', '廠商方案名稱', '手機/虛擬帳號', '方案金額', 'CMX訂單編號']
+        ws_new.append(headers)
+        for data in sheet1_data:
+            ws_new.append([data[h] for h in headers])
+            if data['is_diff']:
+                for cell in ws_new[ws_new.max_row]: cell.fill = yellow_fill
+
+        # B. ACG對帳明細 (標色區間受 stop_idx 限制)
+        if 'ACG對帳明細' in wb.sheetnames:
+            ws_acg = wb['ACG對帳明細']
+            h_list = [cell.value for cell in ws_acg[1]]
+            
+            # 確保欄位存在
+            if '手機/虛擬帳號' in h_list and '廠商對帳key1' in h_list:
+                p_idx = h_list.index('手機/虛擬帳號') + 1
+                k_idx = h_list.index('廠商對帳key1') + 1
+                
+                max_reconcile_row = (stop_idx + 1) if stop_idx is not None else ws_acg.max_row
+                
+                for r_idx in range(2, max_reconcile_row + 1):
+                    p_val = str(ws_acg.cell(row=r_idx, column=p_idx).value).strip()
+                    k_val = str(ws_acg.cell(row=r_idx, column=k_idx).value).strip()
+                    if "*" in p_val:
+                        equiv_sku = reverse_sku_map.get(k_val, k_val)
+                        if (p_val, equiv_sku) not in a_lookup_set:
+                            for cell in ws_acg[r_idx]: cell.fill = yellow_fill
+        
+        # 儲存到 Buffer
+        wb.save(output_buffer)
+        return output_buffer.getvalue(), logs, diff_a_not_b, diff_b_not_a
+
+    except Exception as e:
+        return None, [f"❌ 嚴重程式錯誤: {str(e)}"], None, None
+
+
+# ==========================================
+# 介面顯示區
+# ==========================================
+
+col1, col2 = st.columns(2)
+with col1:
+    st.subheader("1. 上傳 A 表 (Supplier Report)")
+    file_a = st.file_uploader("廠商報表 (請款明細)", type=['xlsx', 'xls'], key='a')
+    st.info("💡 邏輯：讀取第 3 行作為標題 (header=2)")
+
+with col2:
+    st.subheader("2. 上傳 B 表 (ACG 對帳單)")
+    file_b = st.file_uploader("車美仕對帳單 (含 ACG對帳明細)", type=['xlsx', 'xls'], key='b')
+    st.info("💡 邏輯：尋找「ACG對帳明細」工作表")
+
+if st.button("🚀 開始對帳", type="primary"):
+    if file_a and file_b:
+        with st.spinner("對帳中..."):
+            result_bytes, logs, diff_a, diff_b = process_litv(file_a, file_b)
+        
+        # 顯示 Log
+        with st.expander("執行紀錄 (Logs)", expanded=True):
+            for log in logs:
+                st.write(log)
+
+        if result_bytes:
+            st.success("✅ 對帳成功！")
+            
+            # 顯示差異預覽
+            c1, c2 = st.columns(2)
+            c1.error(f"🟥 A有B無 (共 {len(diff_a)} 筆)")
+            if diff_a: c1.dataframe(pd.DataFrame(diff_a))
+            
+            c2.warning(f"🟨 B有A無 (共 {len(diff_b)} 筆)")
+            if diff_b: c2.dataframe(pd.DataFrame(diff_b))
+
+            st.download_button(
+                label="📥 下載對帳結果 (Excel)",
+                data=result_bytes,
+                file_name="LiTV_CMX確認.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    else:
+        st.warning("⚠️ 請上傳這兩個檔案！")
