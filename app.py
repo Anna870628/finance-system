@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 import os
+import re
 import xlsxwriter
 import openpyxl
 from openpyxl.styles import PatternFill
@@ -11,8 +12,8 @@ from datetime import datetime
 # ==========================================
 # 頁面基本設定
 # ==========================================
-st.set_page_config(page_title="自動對帳系統 (最終修正版)", page_icon="📊", layout="wide")
-st.title("📊 自動對帳系統 (最終修正版)")
+st.set_page_config(page_title="自動對帳系統 (最終位置修正版)", page_icon="📊", layout="wide")
+st.title("📊 自動對帳系統 (最終位置修正版)")
 
 # 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
@@ -25,9 +26,9 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
     logs = []
 
     try:
-        # 參數說明：
-        # file_supplier_upload = 左邊上傳的檔案 (廠商報表，原本的 B 表邏輯)
-        # file_billing_upload = 右邊上傳的檔案 (請款明細，原本的 A 表邏輯)
+        # 參數定義：
+        # file_supplier_upload = 左邊上傳的 (廠商報表 / Logic B)
+        # file_billing_upload = 右邊上傳的 (請款明細 / Logic A)
 
         sheet_name_billing = '請款'
         sheet_name_details = '累計明細'
@@ -37,9 +38,14 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         col_phone = '手機號碼'
         target_month_str = datetime.now().strftime("%Y/%m")
 
-        # --- 1. 處理右邊檔案 (請款明細 - 原 A 表邏輯) ---
-        logs.append(f"📂 正在讀取右側檔案 (請款明細)...")
+        # 重置指標 (Streamlit 必要)
+        file_supplier_upload.seek(0)
         file_billing_upload.seek(0)
+
+        # ---------------------------------------------------------
+        # 1. 處理右邊檔案 (請款明細) -> 這裡跑的是原本的 Logic A
+        # ---------------------------------------------------------
+        logs.append(f"📂 正在讀取右側檔案 (請款明細 - Logic A)...")
         xls_a = pd.ExcelFile(file_billing_upload)
 
         # 讀取 A 表 (請款) - 統計金額用
@@ -53,7 +59,6 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         
         df_daily = pd.read_excel(xls_a, sheet_name=sheet_name_billing, header=header_row_idx, usecols="A:E")
         
-        # 統計金額
         if len(df_daily.columns) >= 5:
             val_count = pd.to_numeric(df_daily.iloc[:, 1], errors='coerce').fillna(0).sum()
             val_billing = pd.to_numeric(df_daily.iloc[:, 2], errors='coerce').fillna(0).sum()
@@ -62,19 +67,14 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         else:
             val_count, val_billing, val_sms, val_total = 0, 0, 0, 0
 
-        if not df_daily.empty:
-            col_date = df_daily.columns[0]
-            df_daily[col_date] = pd.to_datetime(df_daily[col_date], errors='coerce').dt.strftime('%Y-%m-%d')
-            df_daily = df_daily.dropna(subset=[col_date])
-
-        # 讀取 A 表詳細資料 (對帳用)
+        # 讀取詳細資料 (df_a = 請款數據)
         df_details = pd.read_excel(xls_a, sheet_name=sheet_name_details)
         df_a = df_details.dropna(subset=[col_id]).copy()
         
-        # 【關鍵修復】強制轉字串並去空白，解決無法匹配的問題
+        # 【關鍵修復】強制轉字串 + 去除空白 + 去除 .0 (解決無法匹配問題)
         df_a[col_id] = df_a[col_id].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         
-        # 排除合計行
+        # 排除合計
         df_a = df_a[~df_a[col_id].str.contains('合計|Total|總計', case=False, na=False)]
         
         if col_plate in df_a.columns:
@@ -85,9 +85,10 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
             df_a[col_phone] = df_a[col_phone].astype(str).str.strip()
         df_a = df_a.drop_duplicates(subset=[col_id, col_plate])
 
-        # --- 2. 處理左邊檔案 (廠商報表 - 原 B 表邏輯) ---
-        logs.append(f"📂 正在讀取左側檔案 (廠商報表)...")
-        file_supplier_upload.seek(0)
+        # ---------------------------------------------------------
+        # 2. 處理左邊檔案 (廠商報表) -> 這裡跑的是原本的 Logic B
+        # ---------------------------------------------------------
+        logs.append(f"📂 正在讀取左側檔案 (廠商報表 - Logic B)...")
         
         # 原 B 表邏輯：讀 header=2
         df_b_original = pd.read_excel(file_supplier_upload, sheet_name=0, header=2)
@@ -103,7 +104,7 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         
         df_b = df_b_filtered.dropna(subset=[col_id]).copy()
         
-        # 【關鍵修復】強制轉字串並去空白 (同上)
+        # 【關鍵修復】強制轉字串 (同上，確保能跟 df_a 對上)
         df_b[col_id] = df_b[col_id].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         
         df_b[col_plate] = df_b[col_plate].astype(str).str.strip()
@@ -113,31 +114,37 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
             df_b[col_phone] = df_b[col_phone].astype(str).str.strip()
         df_b = df_b.drop_duplicates(subset=[col_id, col_plate])
 
-        # --- 3. 合併對帳 ---
-        # 這裡的邏輯是：df_a 是請款(基準)，df_b 是廠商
-        # left_only = 請款有，廠商無 (藍色)
-        # right_only = 廠商有，請款無 (粉色)
-        # both = 都有 (白色/無色)
-        
+        # ---------------------------------------------------------
+        # 3. 合併對帳
+        # ---------------------------------------------------------
         cols_keep = [col_id, col_plate, col_phone]
+        
+        # merge: on 訂單編號
         df_total = pd.merge(
-            df_a[cols_keep], df_b[cols_keep],
-            on=[col_id, col_plate], how='outer', indicator=True, suffixes=('_A', '_B')
+            df_a[cols_keep], 
+            df_b[cols_keep],
+            on=[col_id, col_plate], 
+            how='outer', 
+            indicator=True, 
+            suffixes=('_A', '_B')
         )
 
-        # 簡單檢查一下有沒有 both
-        match_count = len(df_total[df_total['_merge'] == 'both'])
-        logs.append(f"✅ 對帳完成: 成功匹配(Both) {match_count} 筆")
-        logs.append(f"📊 數據統計: 請款明細有效 {len(df_a)} 筆, 廠商報表有效 {len(df_b)} 筆")
+        logs.append(f"✅ 對帳完成: 請款明細有效 {len(df_a)} 筆, 廠商報表有效 {len(df_b)} 筆")
+        
+        # 檢查 Both 數量
+        both_count = len(df_total[df_total['_merge'] == 'both'])
+        logs.append(f"🔗 成功匹配 (Both): {both_count} 筆")
 
-        # --- 4. 寫入 Excel ---
+        # ---------------------------------------------------------
+        # 4. 寫入 Excel
+        # ---------------------------------------------------------
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             wb = writer.book
             fmt_header = wb.add_format({'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 'align': 'center'})
             fmt_content = wb.add_format({'border': 1, 'align': 'center'})
             fmt_currency = wb.add_format({'num_format': '#,##0', 'border': 1, 'align': 'right'})
-            fmt_blue = wb.add_format({'bg_color': '#DDEBF7'}) # 僅 A 表
-            fmt_pink = wb.add_format({'bg_color': '#FCE4D6'}) # 僅 B 表
+            fmt_blue = wb.add_format({'bg_color': '#DDEBF7'}) # 僅A表 (左邊有，右邊無) -> 實務上是請款有，廠商無
+            fmt_pink = wb.add_format({'bg_color': '#FCE4D6'}) # 僅B表 (右邊有，左邊無) -> 實務上是廠商有，請款無
 
             # Sheet 1: 請款 (維持原樣)
             ws1 = wb.add_worksheet('請款')
@@ -157,12 +164,12 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
             df_total.to_excel(writer, sheet_name='對帳總表', index=False)
             ws2 = writer.sheets['對帳總表']
             
-            # 設定顏色
             for i, val in enumerate(df_total['_merge']):
-                # pandas 寫入 excel 時 header 佔用第 0 列，所以資料從 i+1 開始
+                # left_only = df_a (請款) 獨有
                 if val == 'left_only': ws2.set_row(i+1, None, fmt_blue)
+                # right_only = df_b (廠商) 獨有
                 elif val == 'right_only': ws2.set_row(i+1, None, fmt_pink)
-                # both 不設顏色 (保留預設白色)
+                # both 不上色 (預設白)
             
             df_total[df_total['_merge'] == 'left_only'].drop(columns=['_merge']).to_excel(writer, sheet_name='僅A表有', index=False)
             df_total[df_total['_merge'] == 'right_only'].drop(columns=['_merge']).to_excel(writer, sheet_name='僅B表有', index=False)
@@ -334,18 +341,18 @@ def process_litv(file_a_upload, file_b_upload):
 
 if mode == "🚗 洗車對帳 (Code A)":
     st.header("🚗 洗車訂單對帳")
-    st.info("💡 已將邏輯綁定：左邊為廠商報表，右邊為請款明細。")
+    st.info("💡 邏輯：左邊放「廠商報表」，右邊放「請款明細」。系統會強制訂單編號格式一致，解決無法匹配問題。")
     col1, col2 = st.columns(2)
     
-    # 【嚴格執行】
-    # file_supplier (左) -> 傳入函數後，會用 "廠商報表 (Header=2)" 的邏輯處理
-    # file_billing (右) -> 傳入函數後，會用 "請款明細 (Sheet=請款)" 的邏輯處理
-    file_supplier = col1.file_uploader("1. 廠商報表 (請上傳到左邊)", type=['xlsx', 'xls'], key="car_supplier")
-    file_billing = col2.file_uploader("2. 請款明細 (請上傳到右邊)", type=['xlsx', 'xls'], key="car_billing")
+    # 【已修改】左邊上傳廠商報表 (Logic B)
+    file_supplier = col1.file_uploader("1. 廠商報表 (A表的位置 -> 用B表的邏輯)", type=['xlsx', 'xls'], key="car_supplier")
+    # 【已修改】右邊上傳請款明細 (Logic A)
+    file_billing = col2.file_uploader("2. 請款明細 (B表的位置 -> 用A表的邏輯)", type=['xlsx', 'xls'], key="car_billing")
     
     if st.button("🚀 開始洗車對帳", type="primary"):
         if file_billing and file_supplier:
             with st.spinner("洗車資料處理中..."):
+                # 傳入順序: process_car_wash(左邊檔案, 右邊檔案)
                 result, logs = process_car_wash(file_supplier, file_billing)
             
             st.expander("執行紀錄", expanded=True).write(logs)
