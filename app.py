@@ -146,7 +146,7 @@ def process_car_wash(file_a, file_b):
         return None, [f"❌ 錯誤: {str(e)}"]
 
 # ==========================================
-# 🔵 功能 B：LiTV 對帳邏輯
+# 🔵 功能 B：LiTV 對帳邏輯 (修正：相容「金額」與「方案金額」)
 # ==========================================
 def process_litv(file_a, file_b):
     output = io.BytesIO()
@@ -163,18 +163,30 @@ def process_litv(file_a, file_b):
         # 預讀前 20 行找標題
         df_temp = pd.read_excel(file_a, header=None, nrows=20)
         header_idx = -1
+        
+        # 修正：同時尋找 '金額' 或 '方案金額'
         for i, row in df_temp.iterrows():
             row_str = " ".join([str(x).strip() for x in row.values])
-            if '訂單編號' in row_str and '金額' in row_str:
+            if '訂單編號' in row_str and ('金額' in row_str or '方案金額' in row_str):
                 header_idx = i
                 break
         
         if header_idx == -1:
-            return None, ["❌ 錯誤：在 A 表中找不到「訂單編號」或「金額」欄位，請確認檔案格式。"], None, None
+            return None, ["❌ 錯誤：在 A 表中找不到「訂單編號」或「金額 / 方案金額」欄位，請確認檔案格式。"], None, None
 
         # 正式讀取 A 表
         df_a = pd.read_excel(file_a, header=header_idx)
         df_a.columns = df_a.columns.str.strip() # 去空白
+        
+        # 修正：如果欄位叫做 '方案金額'，將其改名為 '金額' 以便後續處理
+        if '方案金額' in df_a.columns:
+            df_a.rename(columns={'方案金額': '金額'}, inplace=True)
+            logs.append("💡 提示：偵測到「方案金額」欄位，已自動視為「金額」處理。")
+            
+        # 再次檢查確保欄位存在
+        if '金額' not in df_a.columns:
+            return None, [f"❌ 錯誤：雖然找到標題列，但找不到「金額」欄位。目前欄位有：{list(df_a.columns)}"], None, None
+
         df_a['金額'] = pd.to_numeric(df_a['金額'], errors='coerce').fillna(0)
 
         df_a_filtered = df_a[
