@@ -12,8 +12,8 @@ from datetime import datetime
 # ==========================================
 # 頁面基本設定
 # ==========================================
-st.set_page_config(page_title="自動對帳系統 (字體加大版)", page_icon="📊", layout="wide")
-st.title("📊 自動對帳系統 (字體加大版)")
+st.set_page_config(page_title="自動對帳系統 (特大字體版)", page_icon="📊", layout="wide")
+st.title("📊 自動對帳系統 (特大字體版)")
 
 # 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
@@ -27,7 +27,6 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
     output_filename = "洗車對帳結果.xlsx"
 
     try:
-        # 1. 設定輸出檔名 (依照 B 表名稱)
         if file_billing_upload:
             base_name = os.path.splitext(file_billing_upload.name)[0]
             output_filename = f"{base_name}_CMX確認.xlsx"
@@ -126,51 +125,80 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         logs.append(f"✅ 對帳完成: 請款 {len(df_a)} 筆, 廠商 {len(df_b)} 筆")
 
         # ---------------------------------------------------------
-        # 4. 寫入 Excel (字體設定區)
+        # 4. 寫入 Excel (字體調整區)
         # ---------------------------------------------------------
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             wb = writer.book
             
-            # 【字體加大設定】
-            # Header: 14號字
+            # 【字體設定：全部改為 18】
+            base_font_size = 18
+            header_font_size = 20 # 標題稍微大一點點
+
             fmt_header = wb.add_format({
                 'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 
-                'align': 'center', 'font_size': 14
+                'align': 'center', 'valign': 'vcenter', 
+                'font_size': header_font_size
             })
             
-            # Content: 12號字 (原預設11)
             fmt_content = wb.add_format({
-                'border': 1, 'align': 'center', 'font_size': 12
-            })
-            fmt_currency = wb.add_format({
-                'num_format': '#,##0', 'border': 1, 'align': 'right', 'font_size': 12
+                'border': 1, 'align': 'center', 'valign': 'vcenter', 
+                'font_size': base_font_size
             })
             
-            # 差異標示: 12號字
-            fmt_blue = wb.add_format({'bg_color': '#DDEBF7', 'font_size': 12})
-            fmt_pink = wb.add_format({'bg_color': '#FCE4D6', 'font_size': 12})
+            fmt_currency = wb.add_format({
+                'num_format': '#,##0', 'border': 1, 'align': 'right', 'valign': 'vcenter',
+                'font_size': base_font_size
+            })
+            
+            # 差異標示
+            fmt_blue = wb.add_format({'bg_color': '#DDEBF7', 'font_size': base_font_size})
+            fmt_pink = wb.add_format({'bg_color': '#FCE4D6', 'font_size': base_font_size})
+            
+            # 月份格式
+            fmt_text_month = wb.add_format({'num_format': '@', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'font_size': base_font_size})
+            fmt_bold_total = wb.add_format({'bold': True, 'num_format': '#,##0', 'border': 1, 'bg_color': '#FFF2CC', 'align': 'right', 'valign': 'vcenter', 'font_size': base_font_size})
 
+            # --- Sheet 1: 請款 ---
             ws1 = wb.add_worksheet('請款')
             writer.sheets['請款'] = ws1
-            headers = ['統計月份', '轉檔筆數', '轉檔請款金額', '簡訊請款金額', '合計金額']
-            values = [target_month_str, val_count, val_billing, val_sms, val_total]
             
-            for col, (h, v) in enumerate(zip(headers, values)):
-                ws1.write(0, col, h, fmt_header)
-                ws1.write(1, col, v, fmt_currency if isinstance(v, (int, float)) else fmt_content)
+            top_headers = ['統計月份', '轉檔筆數', '轉檔請款金額', '簡訊請款金額', '合計金額']
+            top_values = [target_month_str, val_count, val_billing, val_sms, val_total]
             
-            for col, h in enumerate(df_daily.columns):
-                ws1.write(3, col, h, fmt_header)
-            df_daily.to_excel(writer, sheet_name='請款', startrow=4, header=False, index=False)
+            # 設定行高 (字變大了，行高也要變大)
+            ws1.set_row(0, 40)
+            ws1.set_row(1, 35)
 
+            for col, (header, val) in enumerate(zip(top_headers, top_values)):
+                ws1.write(0, col, header, fmt_header)
+                if col == 0: ws1.write(1, col, val, fmt_text_month)
+                elif col == 4: ws1.write(1, col, val, fmt_bold_total)
+                else:
+                    if isinstance(val, (int, float)): ws1.write(1, col, val, fmt_currency)
+                    else: ws1.write(1, col, val, fmt_content)
+            
+            for col_idx, col_name in enumerate(df_daily.columns):
+                ws1.write(3, col_idx, col_name, fmt_header)
+            
+            # 寫入資料
+            df_daily.to_excel(writer, sheet_name='請款', startrow=4, header=False, index=False)
+            
+            # 手動加寬欄位以適應大字體
+            ws1.set_column('A:A', 30) # 日期欄位加寬
+            ws1.set_column('B:E', 25) # 金額欄位加寬
+
+            # --- Sheet 2: 對帳總表 ---
             df_total.to_excel(writer, sheet_name='對帳總表', index=False)
             ws2 = writer.sheets['對帳總表']
             
             # 設定顏色與字體
             for i, val in enumerate(df_total['_merge']):
-                if val == 'left_only': ws2.set_row(i+1, None, fmt_blue)
-                elif val == 'right_only': ws2.set_row(i+1, None, fmt_pink)
-                else: ws2.set_row(i+1, None, fmt_content) # Both 也要設字體
+                if val == 'left_only': ws2.set_row(i+1, 30, fmt_blue) # 行高設為 30
+                elif val == 'right_only': ws2.set_row(i+1, 30, fmt_pink)
+                else: ws2.set_row(i+1, 30, fmt_content) 
+            
+            # 設定標題列行高
+            ws2.set_row(0, 35)
             
             df_total[df_total['_merge'] == 'left_only'].drop(columns=['_merge']).to_excel(writer, sheet_name='僅A表有', index=False)
             df_total[df_total['_merge'] == 'right_only'].drop(columns=['_merge']).to_excel(writer, sheet_name='僅B表有', index=False)
@@ -302,8 +330,8 @@ def process_litv(file_a_upload, file_b_upload):
         logs.append("正在寫入 Excel...")
         yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
         
-        # 定義 12號字體
-        font_style = Font(size=12)
+        # 定義 18號字體
+        font_style = Font(size=18)
 
         if "CMX對帳明細" in wb.sheetnames: del wb["CMX對帳明細"]
         ws_new = wb.create_sheet("CMX對帳明細", 0)
@@ -314,7 +342,7 @@ def process_litv(file_a_upload, file_b_upload):
             row_data = [data[h] for h in headers]
             ws_new.append(row_data)
             
-            # 設定這行字體為 12
+            # 設定這行字體為 18
             for cell in ws_new[ws_new.max_row]:
                 cell.font = font_style
                 if data['is_diff']:
