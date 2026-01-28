@@ -388,7 +388,7 @@ if mode == "🚗 洗車對帳 (Code A)":
         file_supplier = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_supplier", label_visibility="collapsed")
     
     with col2:
-        st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2. LiTV請款明細 (B表)</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2. TMS請款明細 (B表)</h3>", unsafe_allow_html=True)
         file_billing = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_billing", label_visibility="collapsed")
     
     if st.button("🚀 開始洗車對帳", type="primary"):
@@ -420,7 +420,7 @@ elif mode == "📺 LiTV 對帳 (Code B)":
         file_a = st.file_uploader(" ", type=['xlsx', 'xls'], key="litv_a", label_visibility="collapsed")
     
     with col2:
-        st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2. TMS對帳單 (B表)</h3>", unsafe_allow_html=True)
+        st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2.  LiTV請款明細  (B表)</h3>", unsafe_allow_html=True)
         file_b = st.file_uploader(" ", type=['xlsx', 'xls'], key="litv_b", label_visibility="collapsed")
     
     if st.button("🚀 開始 LiTV 對帳", type="primary"):
