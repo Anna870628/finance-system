@@ -12,14 +12,14 @@ from datetime import datetime
 # ==========================================
 # 頁面基本設定
 # ==========================================
-st.set_page_config(page_title="自動對帳系統整合版", page_icon="📊", layout="wide")
-st.title("📊 自動對帳系統 (整合版)")
+st.set_page_config(page_title="自動對帳系統", page_icon="📊", layout="wide")
+st.title("📊 自動對帳系統 (Original Code Logic)")
 
 # 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
 
 # ==========================================
-# 🔴 功能 A：洗車對帳邏輯 (維持不變)
+# 🔴 功能 A：洗車對帳邏輯
 # ==========================================
 def process_car_wash(file_a, file_b):
     output = io.BytesIO()
@@ -37,7 +37,8 @@ def process_car_wash(file_a, file_b):
         logs.append(f"📂 正在讀取檔案...")
         xls_a = pd.ExcelFile(file_a)
 
-        # 自動找標題 (洗車專用)
+        # 1. 讀取 A 表 (請款) - 這裡需要自動找標題是因為洗車報表格式比較特殊
+        # 這裡維持你原本洗車 CODE 的邏輯
         df_temp = pd.read_excel(xls_a, sheet_name=sheet_name_billing, header=None, usecols="A:E", nrows=20)
         header_row_idx = 2
         for i, row in df_temp.iterrows():
@@ -61,7 +62,7 @@ def process_car_wash(file_a, file_b):
             df_daily[col_date] = pd.to_datetime(df_daily[col_date], errors='coerce').dt.strftime('%Y-%m-%d')
             df_daily = df_daily.dropna(subset=[col_date])
 
-        # A 表詳細
+        # 2. 準備 A 表詳細資料
         df_details = pd.read_excel(xls_a, sheet_name=sheet_name_details)
         df_a = df_details.dropna(subset=[col_id]).copy()
         df_a[col_id] = df_a[col_id].astype(str).str.strip()
@@ -74,7 +75,9 @@ def process_car_wash(file_a, file_b):
             df_a[col_phone] = df_a[col_phone].astype(str).str.strip()
         df_a = df_a.drop_duplicates(subset=[col_id, col_plate])
 
-        # B 表詳細
+        # 3. 準備 B 表
+        # Streamlit 讀取第二次以上時，必須重置游標
+        if hasattr(file_b, 'seek'): file_b.seek(0)
         df_b_original = pd.read_excel(file_b, sheet_name=0, header=2)
         df_b_processing = df_b_original.copy()
         df_b_refunds = pd.DataFrame()
@@ -93,7 +96,7 @@ def process_car_wash(file_a, file_b):
             df_b[col_phone] = df_b[col_phone].astype(str).str.strip()
         df_b = df_b.drop_duplicates(subset=[col_id, col_plate])
 
-        # 合併
+        # 4. 合併
         cols_keep = [col_id, col_plate, col_phone]
         df_total = pd.merge(
             df_a[cols_keep], df_b[cols_keep],
@@ -102,7 +105,7 @@ def process_car_wash(file_a, file_b):
 
         logs.append(f"✅ 對帳完成: A表有效筆數 {int(val_count)}, B表退款筆數 {len(df_b_refunds)}")
 
-        # 寫入 Excel
+        # 5. 寫入 Excel
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             wb = writer.book
             fmt_header = wb.add_format({'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 'align': 'center'})
@@ -142,7 +145,7 @@ def process_car_wash(file_a, file_b):
         return None, [f"❌ 錯誤: {str(e)}"]
 
 # ==========================================
-# 🔵 功能 B：LiTV 對帳邏輯 (完全復刻原版邏輯)
+# 🔵 功能 B：LiTV 對帳邏輯 (嚴格遵守 Original Code)
 # ==========================================
 def process_litv(file_a, file_b):
     output = io.BytesIO()
@@ -151,37 +154,28 @@ def process_litv(file_a, file_b):
     try:
         # --- 1. 複製 B 表作為基底 ---
         # 原碼：shutil.copy(file_b_path, output_name)
-        # 轉換為 Streamlit 記憶體操作：
+        # Streamlit 對應：載入 B 表內容到 openpyxl 物件
         file_b_bytes = io.BytesIO(file_b.getvalue())
         wb = openpyxl.load_workbook(file_b_bytes)
         
         # --- 2. 處理報表 A (比對基準) ---
-        logs.append("正在讀取 A 表 (使用 header=2)...")
+        logs.append("正在讀取 A 表 (header=2)...")
         
-        # 原碼：df_a = pd.read_excel(file_a_path, header=2)
-        file_a.seek(0)
+        # 重要：Streamlit 上傳的檔案是指標，讀取前要歸零
+        file_a.seek(0) 
+        
+        # *** 這裡完全照你原本的 CODE ***
         df_a = pd.read_excel(file_a, header=2)
-        
-        # 原碼：df_a.columns = df_a.columns.str.strip()
         df_a.columns = df_a.columns.str.strip()
         
-        # 原碼：df_a['金額'] = pd.to_numeric(df_a['金額'], errors='coerce').fillna(0)
-        # 這裡加入一個簡單檢查，如果 user 檔案其實是 header=0，至少給個提示，而不是直接報錯
-        if '金額' not in df_a.columns:
-             # 如果 header=2 讀不到，嘗試 fallback 到 header=0 (為了容錯)
-             if '金額' not in df_a.columns and '方案金額' not in df_a.columns:
-                 # 嘗試讀取 header=0
-                 file_a.seek(0)
-                 df_a = pd.read_excel(file_a, header=0)
-                 df_a.columns = df_a.columns.str.strip()
-                 logs.append("⚠️ 注意：header=2 找不到金額欄位，已自動切換為 header=0 讀取。")
-
-        if '方案金額' in df_a.columns:
-            df_a.rename(columns={'方案金額': '金額'}, inplace=True)
-            
+        # 為了避免你之前提到的「方案金額」問題，這裡做一個極小的相容性處理
+        # 如果欄位是「方案金額」，就暫時改名為「金額」讓後面程式能跑
+        # 這不影響原本邏輯，只是為了適應新舊表頭
+        if '方案金額' in df_a.columns and '金額' not in df_a.columns:
+             df_a.rename(columns={'方案金額': '金額'}, inplace=True)
+        
         df_a['金額'] = pd.to_numeric(df_a['金額'], errors='coerce').fillna(0)
 
-        # 原碼篩選邏輯
         df_a_filtered = df_a[
             (df_a['金額'] > 0) &
             (df_a['退款時間'].isna()) &
@@ -197,12 +191,13 @@ def process_litv(file_a, file_b):
         df_a_filtered['手機全碼'] = df_a_filtered['手機號碼'].apply(fix_phone_a)
         df_a_filtered['手機隱碼'] = df_a_filtered['手機全碼'].apply(lambda x: x[:6] + '****' if len(x) >= 10 else x)
         df_a_filtered['方案(SKU)'] = df_a_filtered['方案(SKU)'].astype(str).str.strip()
-        a_lookup_set = set(zip(df_a_filtered['手機隱碼'], df_a_filtered['方案(SKU)']))
+        a_lookup_set = set(zip(df_a_filtered['手機隱碼'], df_a_filtered['方案(SKU)'].str.strip()))
 
         # --- 3. 處理報表 B (ACG對帳明細) ---
-        logs.append("正在處理 B 表 (ACG對帳明細)...")
-        # 需重置 file_b 指標給 pandas 讀取
+        logs.append("正在處理 B 表...")
+        # Streamlit 必須重置 B 表讀取指標
         file_b.seek(0)
+        
         df_b_acg_full = pd.read_excel(file_b, sheet_name='ACG對帳明細')
         df_b_acg_full.columns = df_b_acg_full.columns.str.strip()
 
@@ -259,7 +254,7 @@ def process_litv(file_a, file_b):
                 if (b_phone, equiv_sku) not in a_lookup_set:
                     diff_b_not_a.append({'手機/虛擬帳號': b_phone, '廠商對帳key1': b_key})
 
-        # --- 6. 修改 Excel 標註 (Openpyxl) ---
+        # --- 6. 修改 Excel 標註 ---
         yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
 
         # A. CMX對帳明細
@@ -277,11 +272,9 @@ def process_litv(file_a, file_b):
             ws_acg = wb['ACG對帳明細']
             h_list = [cell.value for cell in ws_acg[1]]
             
-            # 確保欄位存在
             if '手機/虛擬帳號' in h_list and '廠商對帳key1' in h_list:
                 p_idx = h_list.index('手機/虛擬帳號') + 1
                 k_idx = h_list.index('廠商對帳key1') + 1
-                
                 max_reconcile_row = (stop_idx + 1) if stop_idx is not None else ws_acg.max_row
                 
                 for r_idx in range(2, max_reconcile_row + 1):
@@ -331,31 +324,4 @@ elif mode == "📺 LiTV 對帳 (Code B)":
     
     col1, col2 = st.columns(2)
     file_a = col1.file_uploader("上傳 A 表 (report_supplier...)", type=['xlsx', 'xls'])
-    file_b = col2.file_uploader("上傳 B 表 (車美仕對帳單...)", type=['xlsx', 'xls'])
-    
-    if st.button("開始對帳", type="primary"):
-        if file_a and file_b:
-            with st.spinner("比對資料中..."):
-                result, logs, diff_a, diff_b = process_litv(file_a, file_b)
-            
-            with st.expander("查看執行紀錄", expanded=True):
-                for l in logs:
-                    st.text(l)
-            
-            if result:
-                st.success("成功！")
-                c1, c2 = st.columns(2)
-                c1.error(f"A有B無 (共 {len(diff_a) if diff_a else 0} 筆)")
-                if diff_a: c1.dataframe(pd.DataFrame(diff_a))
-                
-                c2.warning(f"B有A無 (共 {len(diff_b) if diff_b else 0} 筆)")
-                if diff_b: c2.dataframe(pd.DataFrame(diff_b))
-                
-                st.download_button(
-                    label="📥 下載 LiTV 對帳結果",
-                    data=result,
-                    file_name=f"LiTV_對帳_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-        else:
-            st.warning("⚠️ 請確認兩個檔案都已上傳。")
+    file_b = col
