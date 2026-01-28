@@ -12,8 +12,8 @@ from datetime import datetime
 # ==========================================
 # 頁面基本設定
 # ==========================================
-st.set_page_config(page_title="自動對帳系統 (特大字體版)", page_icon="📊", layout="wide")
-st.title("📊 自動對帳系統 (特大字體版)")
+st.set_page_config(page_title="自動對帳系統 (介面優化版)", page_icon="📊", layout="wide")
+st.title("📊 自動對帳系統 (介面優化版)")
 
 # 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
@@ -130,9 +130,9 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             wb = writer.book
             
-            # 【字體設定：全部改為 18】
+            # 【Excel 字體設定：全部改為 18】
             base_font_size = 18
-            header_font_size = 20 # 標題稍微大一點點
+            header_font_size = 20
 
             fmt_header = wb.add_format({
                 'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 
@@ -165,7 +165,6 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
             top_headers = ['統計月份', '轉檔筆數', '轉檔請款金額', '簡訊請款金額', '合計金額']
             top_values = [target_month_str, val_count, val_billing, val_sms, val_total]
             
-            # 設定行高 (字變大了，行高也要變大)
             ws1.set_row(0, 40)
             ws1.set_row(1, 35)
 
@@ -180,24 +179,20 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
             for col_idx, col_name in enumerate(df_daily.columns):
                 ws1.write(3, col_idx, col_name, fmt_header)
             
-            # 寫入資料
             df_daily.to_excel(writer, sheet_name='請款', startrow=4, header=False, index=False)
             
-            # 手動加寬欄位以適應大字體
-            ws1.set_column('A:A', 30) # 日期欄位加寬
-            ws1.set_column('B:E', 25) # 金額欄位加寬
+            ws1.set_column('A:A', 30) 
+            ws1.set_column('B:E', 25) 
 
             # --- Sheet 2: 對帳總表 ---
             df_total.to_excel(writer, sheet_name='對帳總表', index=False)
             ws2 = writer.sheets['對帳總表']
             
-            # 設定顏色與字體
             for i, val in enumerate(df_total['_merge']):
-                if val == 'left_only': ws2.set_row(i+1, 30, fmt_blue) # 行高設為 30
+                if val == 'left_only': ws2.set_row(i+1, 30, fmt_blue) 
                 elif val == 'right_only': ws2.set_row(i+1, 30, fmt_pink)
                 else: ws2.set_row(i+1, 30, fmt_content) 
             
-            # 設定標題列行高
             ws2.set_row(0, 35)
             
             df_total[df_total['_merge'] == 'left_only'].drop(columns=['_merge']).to_excel(writer, sheet_name='僅A表有', index=False)
@@ -379,7 +374,7 @@ def process_litv(file_a_upload, file_b_upload):
 
 
 # ==========================================
-# 介面顯示邏輯
+# 介面顯示邏輯 (字體放大版)
 # ==========================================
 
 if mode == "🚗 洗車對帳 (Code A)":
@@ -387,8 +382,14 @@ if mode == "🚗 洗車對帳 (Code A)":
     st.info("💡 邏輯：左邊放「廠商報表」，右邊放「請款明細」。")
     col1, col2 = st.columns(2)
     
-    file_supplier = col1.file_uploader("1. 廠商報表 (A表的位置 -> Logic B)", type=['xlsx', 'xls'], key="car_supplier")
-    file_billing = col2.file_uploader("2. 請款明細 (B表的位置 -> Logic A)", type=['xlsx', 'xls'], key="car_billing")
+    with col1:
+        # 使用 Markdown 自訂大字體標題
+        st.markdown("<h3 style='text-align: center; color: #E74C3C;'>1. 廠商報表 (A表位置 -> Logic B)</h3>", unsafe_allow_html=True)
+        file_supplier = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_supplier", label_visibility="collapsed")
+    
+    with col2:
+        st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2. 請款明細 (B表位置 -> Logic A)</h3>", unsafe_allow_html=True)
+        file_billing = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_billing", label_visibility="collapsed")
     
     if st.button("🚀 開始洗車對帳", type="primary"):
         if file_billing and file_supplier:
@@ -413,8 +414,14 @@ elif mode == "📺 LiTV 對帳 (Code B)":
     st.info("💡 邏輯：A表讀 header=2，B表找 ACG對帳明細")
     
     col1, col2 = st.columns(2)
-    file_a = col1.file_uploader("1. 廠商報表 (A表)", type=['xlsx', 'xls'], key="litv_a")
-    file_b = col2.file_uploader("2. CMX 對帳單 (B表)", type=['xlsx', 'xls'], key="litv_b")
+    
+    with col1:
+        st.markdown("<h3 style='text-align: center; color: #E74C3C;'>1. 廠商報表 (A表)</h3>", unsafe_allow_html=True)
+        file_a = st.file_uploader(" ", type=['xlsx', 'xls'], key="litv_a", label_visibility="collapsed")
+    
+    with col2:
+        st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2. CMX 對帳單 (B表)</h3>", unsafe_allow_html=True)
+        file_b = st.file_uploader(" ", type=['xlsx', 'xls'], key="litv_b", label_visibility="collapsed")
     
     if st.button("🚀 開始 LiTV 對帳", type="primary"):
         if file_a and file_b:
