@@ -6,14 +6,14 @@ import os
 import re
 import xlsxwriter
 import openpyxl
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font
 from datetime import datetime
 
 # ==========================================
 # 頁面基本設定
 # ==========================================
-st.set_page_config(page_title="自動對帳系統 (最終版)", page_icon="📊", layout="wide")
-st.title("📊 自動對帳系統 (最終版)")
+st.set_page_config(page_title="自動對帳系統 (字體加大版)", page_icon="📊", layout="wide")
+st.title("📊 自動對帳系統 (字體加大版)")
 
 # 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
@@ -24,22 +24,16 @@ mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)
 def process_car_wash(file_supplier_upload, file_billing_upload):
     output = io.BytesIO()
     logs = []
-    output_filename = "洗車對帳結果.xlsx" # 預設值
+    output_filename = "洗車對帳結果.xlsx"
 
     try:
         # 1. 設定輸出檔名 (依照 B 表名稱)
-        # file_billing_upload 是介面上的 "B表 (右邊)"
         if file_billing_upload:
             base_name = os.path.splitext(file_billing_upload.name)[0]
             output_filename = f"{base_name}_CMX確認.xlsx"
 
-        # 重置指標
         file_supplier_upload.seek(0)
         file_billing_upload.seek(0)
-
-        # 參數定義：
-        # file_supplier_upload = 左邊上傳 (Logic B / 廠商)
-        # file_billing_upload = 右邊上傳 (Logic A / 請款)
 
         sheet_name_billing = '請款'
         sheet_name_details = '累計明細'
@@ -55,7 +49,6 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         logs.append(f"📂 正在讀取右側檔案 (請款明細)...")
         xls_a = pd.ExcelFile(file_billing_upload)
 
-        # 讀取 A 表 (請款) - 統計金額用
         df_temp = pd.read_excel(xls_a, sheet_name=sheet_name_billing, header=None, usecols="A:E", nrows=20)
         header_row_idx = 2
         for i, row in df_temp.iterrows():
@@ -79,11 +72,9 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
             df_daily[col_date] = pd.to_datetime(df_daily[col_date], errors='coerce').dt.strftime('%Y-%m-%d')
             df_daily = df_daily.dropna(subset=[col_date])
 
-        # 讀取詳細資料 (df_a = 請款數據)
         df_details = pd.read_excel(xls_a, sheet_name=sheet_name_details)
         df_a = df_details.dropna(subset=[col_id]).copy()
         
-        # 強制轉字串
         df_a[col_id] = df_a[col_id].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         df_a = df_a[~df_a[col_id].str.contains('合計|Total|總計', case=False, na=False)]
         
@@ -135,15 +126,29 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         logs.append(f"✅ 對帳完成: 請款 {len(df_a)} 筆, 廠商 {len(df_b)} 筆")
 
         # ---------------------------------------------------------
-        # 4. 寫入 Excel
+        # 4. 寫入 Excel (字體設定區)
         # ---------------------------------------------------------
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             wb = writer.book
-            fmt_header = wb.add_format({'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 'align': 'center'})
-            fmt_content = wb.add_format({'border': 1, 'align': 'center'})
-            fmt_currency = wb.add_format({'num_format': '#,##0', 'border': 1, 'align': 'right'})
-            fmt_blue = wb.add_format({'bg_color': '#DDEBF7'})
-            fmt_pink = wb.add_format({'bg_color': '#FCE4D6'})
+            
+            # 【字體加大設定】
+            # Header: 14號字
+            fmt_header = wb.add_format({
+                'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 
+                'align': 'center', 'font_size': 14
+            })
+            
+            # Content: 12號字 (原預設11)
+            fmt_content = wb.add_format({
+                'border': 1, 'align': 'center', 'font_size': 12
+            })
+            fmt_currency = wb.add_format({
+                'num_format': '#,##0', 'border': 1, 'align': 'right', 'font_size': 12
+            })
+            
+            # 差異標示: 12號字
+            fmt_blue = wb.add_format({'bg_color': '#DDEBF7', 'font_size': 12})
+            fmt_pink = wb.add_format({'bg_color': '#FCE4D6', 'font_size': 12})
 
             ws1 = wb.add_worksheet('請款')
             writer.sheets['請款'] = ws1
@@ -161,9 +166,11 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
             df_total.to_excel(writer, sheet_name='對帳總表', index=False)
             ws2 = writer.sheets['對帳總表']
             
+            # 設定顏色與字體
             for i, val in enumerate(df_total['_merge']):
                 if val == 'left_only': ws2.set_row(i+1, None, fmt_blue)
                 elif val == 'right_only': ws2.set_row(i+1, None, fmt_pink)
+                else: ws2.set_row(i+1, None, fmt_content) # Both 也要設字體
             
             df_total[df_total['_merge'] == 'left_only'].drop(columns=['_merge']).to_excel(writer, sheet_name='僅A表有', index=False)
             df_total[df_total['_merge'] == 'right_only'].drop(columns=['_merge']).to_excel(writer, sheet_name='僅B表有', index=False)
@@ -182,17 +189,15 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
 def process_litv(file_a_upload, file_b_upload):
     output_buffer = io.BytesIO()
     logs = []
-    output_filename = "LiTV_CMX確認.xlsx" # 預設值
+    output_filename = "LiTV_CMX確認.xlsx"
 
     try:
-        # --- 0. 自動識別檔案順序 ---
         xl_a = pd.ExcelFile(file_a_upload)
         xl_b = pd.ExcelFile(file_b_upload)
         
         file_a_target = file_a_upload
         file_b_target = file_b_upload
 
-        # 防呆交換
         if 'ACG對帳明細' in xl_a.sheet_names and 'ACG對帳明細' not in xl_b.sheet_names:
             logs.append("💡 偵測到檔案順序相反，已自動交換 A/B 表。")
             file_a_target = file_b_upload
@@ -202,18 +207,15 @@ def process_litv(file_a_upload, file_b_upload):
         else:
              return None, [f"❌ 錯誤：找不到「ACG對帳明細」。"], None, None, None
         
-        # 設定檔名 (使用 B 表 / ACG對帳明細 的原始檔名)
         base_name = os.path.splitext(file_b_target.name)[0]
         output_filename = f"{base_name}_CMX確認.xlsx"
         
         file_a_target.seek(0)
         file_b_target.seek(0)
 
-        # --- 1. 載入 B 表 ---
         logs.append("正在載入 B 表...")
         wb = openpyxl.load_workbook(file_b_target)
 
-        # --- 2. 處理 A 表 ---
         logs.append("正在讀取 A 表 (header=2)...")
         df_a = pd.read_excel(file_a_target, header=2)
         df_a.columns = df_a.columns.str.strip()
@@ -239,7 +241,6 @@ def process_litv(file_a_upload, file_b_upload):
         df_a_filtered['手機隱碼'] = df_a_filtered['手機全碼'].apply(lambda x: x[:6] + '****' if len(x) >= 10 else x)
         a_lookup_set = set(zip(df_a_filtered['手機隱碼'], df_a_filtered['方案(SKU)'].str.strip()))
 
-        # --- 3. 處理 B 表 ---
         logs.append("正在讀取 ACG 對帳明細...")
         file_b_target.seek(0)
         df_b_acg_full = pd.read_excel(file_b_target, sheet_name='ACG對帳明細')
@@ -261,7 +262,7 @@ def process_litv(file_a_upload, file_b_upload):
         df_b_valid['廠商對帳key1'] = df_b_valid['廠商對帳key1'].astype(str).str.strip()
         b_lookup_set = set(zip(df_b_valid['手機/虛擬帳號'], df_b_valid['廠商對帳key1']))
 
-        # --- 4. 對帳 ---
+        # 對帳邏輯
         sku_mapping = {'LiTV_LUX_1Y_OT': ['LiTV_LUX_1Y_OT', 'LiTV_LUX_F1MF_1Y_OT'], 'LiTV_LUX_1M_OT': ['LiTV_LUX_1M_OT']}
         reverse_sku_map = {'LiTV_LUX_F1MF_1Y_OT': 'LiTV_LUX_1Y_OT', 'LiTV_LUX_1Y_OT': 'LiTV_LUX_1Y_OT', 'LiTV_LUX_1M_OT': 'LiTV_LUX_1M_OT'}
 
@@ -297,18 +298,27 @@ def process_litv(file_a_upload, file_b_upload):
                 if (b_phone, equiv_sku) not in a_lookup_set:
                     diff_b_not_a.append({'手機/虛擬帳號': b_phone, '廠商對帳key1': b_key})
 
-        # --- 6. 寫入 Excel ---
+        # --- 6. 寫入 Excel (字體調整) ---
         logs.append("正在寫入 Excel...")
         yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+        
+        # 定義 12號字體
+        font_style = Font(size=12)
 
         if "CMX對帳明細" in wb.sheetnames: del wb["CMX對帳明細"]
         ws_new = wb.create_sheet("CMX對帳明細", 0)
         headers = ['廠商方案代碼', '廠商方案名稱', '手機/虛擬帳號', '方案金額', 'CMX訂單編號']
         ws_new.append(headers)
+        
         for data in sheet1_data:
-            ws_new.append([data[h] for h in headers])
-            if data['is_diff']:
-                for cell in ws_new[ws_new.max_row]: cell.fill = yellow_fill
+            row_data = [data[h] for h in headers]
+            ws_new.append(row_data)
+            
+            # 設定這行字體為 12
+            for cell in ws_new[ws_new.max_row]:
+                cell.font = font_style
+                if data['is_diff']:
+                    cell.fill = yellow_fill
 
         if 'ACG對帳明細' in wb.sheetnames:
             ws_acg = wb['ACG對帳明細']
@@ -323,6 +333,11 @@ def process_litv(file_a_upload, file_b_upload):
                 for r_idx in range(2, max_reconcile_row + 1):
                     p_val = str(ws_acg.cell(row=r_idx, column=p_idx).value).strip()
                     k_val = str(ws_acg.cell(row=r_idx, column=k_idx).value).strip()
+                    
+                    # 設定字體
+                    for cell in ws_acg[r_idx]:
+                        cell.font = font_style
+
                     if "*" in p_val:
                         equiv_sku = reverse_sku_map.get(k_val, k_val)
                         if (p_val, equiv_sku) not in a_lookup_set:
