@@ -26,20 +26,18 @@ def process_car_wash(file_a, file_b):
     logs = []
 
     try:
-        # --- 設定區 ---
         sheet_name_billing = '請款'
         sheet_name_details = '累計明細'
         col_id = '訂單編號'
         col_plate = '車牌'
         col_refund = '退款時間'
         col_phone = '手機號碼'
-        
         target_month_str = datetime.now().strftime("%Y/%m")
 
         logs.append(f"📂 正在讀取檔案...")
         xls_a = pd.ExcelFile(file_a)
 
-        # 1. 讀取 A 表 (請款) - 自動找標題
+        # 1. 讀取 A 表 (請款)
         df_temp = pd.read_excel(xls_a, sheet_name=sheet_name_billing, header=None, usecols="A:E", nrows=20)
         header_row_idx = 2
         for i, row in df_temp.iterrows():
@@ -76,7 +74,7 @@ def process_car_wash(file_a, file_b):
             df_a[col_phone] = df_a[col_phone].astype(str).str.strip()
         df_a = df_a.drop_duplicates(subset=[col_id, col_plate])
 
-        # 3. 準備 B 表詳細資料
+        # 3. 準備 B 表
         df_b_original = pd.read_excel(file_b, sheet_name=0, header=2)
         df_b_processing = df_b_original.copy()
         df_b_refunds = pd.DataFrame()
@@ -95,7 +93,7 @@ def process_car_wash(file_a, file_b):
             df_b[col_phone] = df_b[col_phone].astype(str).str.strip()
         df_b = df_b.drop_duplicates(subset=[col_id, col_plate])
 
-        # 4. 合併對帳
+        # 4. 合併
         cols_keep = [col_id, col_plate, col_phone]
         df_total = pd.merge(
             df_a[cols_keep], df_b[cols_keep],
@@ -113,7 +111,6 @@ def process_car_wash(file_a, file_b):
             fmt_blue = wb.add_format({'bg_color': '#DDEBF7'})
             fmt_pink = wb.add_format({'bg_color': '#FCE4D6'})
 
-            # Sheet 1: 請款
             ws1 = wb.add_worksheet('請款')
             writer.sheets['請款'] = ws1
             headers = ['統計月份', '轉檔筆數', '轉檔請款金額', '簡訊請款金額', '合計金額']
@@ -127,7 +124,6 @@ def process_car_wash(file_a, file_b):
                 ws1.write(3, col, h, fmt_header)
             df_daily.to_excel(writer, sheet_name='請款', startrow=4, header=False, index=False)
 
-            # Sheet 2: 對帳總表
             df_total.to_excel(writer, sheet_name='對帳總表', index=False)
             ws2 = writer.sheets['對帳總表']
             for i, val in enumerate(df_total['_merge']):
@@ -146,80 +142,58 @@ def process_car_wash(file_a, file_b):
         return None, [f"❌ 錯誤: {str(e)}"]
 
 # ==========================================
-# 🔵 功能 B：LiTV 對帳邏輯 (強力診斷版)
+# 🔵 功能 B：LiTV 對帳邏輯 (雷達掃描修正版)
 # ==========================================
 def process_litv(file_a, file_b):
     output = io.BytesIO()
     logs = []
 
     try:
-        # 1. 複製 B 表 (記憶體操作)
+        # 1. 準備 B 表
         file_b_bytes = io.BytesIO(file_b.getvalue())
         wb = openpyxl.load_workbook(file_b_bytes)
         
-        # 2. 處理報表 A
-        logs.append("正在讀取 A 表...")
-        df_a = None
+        # 2. 處理報表 A (使用雷達掃描)
+        logs.append("正在掃描 A 表標題位置...")
+        file_a.seek(0)
         
-        # --- 方法 1: 強制使用 header=2 (仿照原始碼) ---
-        try:
-            file_a.seek(0) # 絕對關鍵：重置指標
-            df_temp = pd.read_excel(file_a, header=2)
+        # 先不帶 header 讀取前 20 行，當作純文字掃描
+        df_raw = pd.read_excel(file_a, header=None, nrows=20)
+        
+        found_header_idx = -1
+        
+        # 逐行掃描
+        for i, row in df_raw.iterrows():
+            # 將這一行的所有格子串成一個字串 (例如: "訂單編號 方案金額 手機號碼")
+            row_text = " ".join([str(val).strip() for val in row.values])
             
-            # 強力清洗欄位名稱：去除前後空白、去除換行
-            df_temp.columns = df_temp.columns.astype(str).str.strip().str.replace('\n', '')
-            
-            # 印出我們看到了什麼 (診斷用)
-            detected_cols = list(df_temp.columns)
-            logs.append(f"🔍 [方法1 header=2] 讀到的欄位: {detected_cols}")
-            
-            # 判斷是否可用
-            has_id = '訂單編號' in detected_cols
-            has_money = '金額' in detected_cols or '方案金額' in detected_cols
-            
-            if has_id and has_money:
-                df_a = df_temp
-                logs.append("✅ 成功使用 header=2 讀取。")
-            else:
-                logs.append("⚠️ header=2 讀取成功但欄位不對，嘗試自動搜尋...")
+            # 判斷條件：這一行必須同時包含 "訂單編號"
+            # 並且包含 ("金額" 或 "方案金額")
+            if '訂單編號' in row_text and ('金額' in row_text or '方案金額' in row_text):
+                found_header_idx = i
+                break
+        
+        if found_header_idx == -1:
+             # 如果找不到，印出前 5 行內容幫助除錯
+             debug_info = df_raw.head(5).to_string()
+             return None, [f"❌ 找不到標題列！程式在 A 表前 20 行都沒看到「訂單編號」。", f"前5行內容預覽:\n{debug_info}"], None, None
 
-        except Exception as e:
-            logs.append(f"⚠️ header=2 讀取失敗: {e}")
+        logs.append(f"✅ 在第 {found_header_idx + 1} 行找到標題，正在讀取資料...")
+        
+        # 用找到的 index 重新讀取
+        file_a.seek(0)
+        df_a = pd.read_excel(file_a, header=found_header_idx)
+        df_a.columns = df_a.columns.astype(str).str.strip().str.replace('\n', '') # 清洗標題
 
-        # --- 方法 2: 如果方法 1 失敗，自動掃描前 20 行 ---
-        if df_a is None:
-            file_a.seek(0)
-            df_raw = pd.read_excel(file_a, header=None, nrows=20)
-            header_idx = -1
-            
-            for i, row in df_raw.iterrows():
-                row_str = "".join([str(x).strip() for x in row.values]) # 串接整列內容
-                if '訂單編號' in row_str and ('金額' in row_str or '方案金額' in row_str):
-                    header_idx = i
-                    break
-            
-            if header_idx != -1:
-                file_a.seek(0)
-                df_a = pd.read_excel(file_a, header=header_idx)
-                df_a.columns = df_a.columns.astype(str).str.strip()
-                logs.append(f"✅ 自動搜尋：在第 {header_idx+1} 行找到標題。")
-
-        # --- 最終檢查 ---
-        if df_a is None:
-             return None, [f"❌ 錯誤：無法讀取 A 表。請檢查 log 看讀到了什麼欄位。", f"最後一次讀到的欄位: {detected_cols if 'detected_cols' in locals() else '無'}"], None, None
-
-        # 欄位改名 (方案金額 -> 金額)
+        # 欄位改名
         if '方案金額' in df_a.columns:
             df_a.rename(columns={'方案金額': '金額'}, inplace=True)
-            logs.append("💡 將「方案金額」視為「金額」。")
+            
+        # 再次確認
+        if '金額' not in df_a.columns:
+             return None, [f"❌ 欄位異常：雖然找到了標題行，但沒有「金額」欄位。", f"讀到的欄位: {list(df_a.columns)}"], None, None
 
-        # 再次檢查必要欄位
-        if '金額' not in df_a.columns or '訂單編號' not in df_a.columns:
-             return None, [f"❌ 嚴重錯誤：缺少必要欄位。\n目前欄位: {list(df_a.columns)}"], None, None
-
-        # ------------------
-        # 以下邏輯與原始碼相同
-        # ------------------
+        # --- 以下邏輯不變 ---
         df_a['金額'] = pd.to_numeric(df_a['金額'], errors='coerce').fillna(0)
 
         df_a_filtered = df_a[
@@ -372,7 +346,6 @@ elif mode == "📺 LiTV 對帳 (Code B)":
             with st.spinner("比對資料中..."):
                 result, logs, diff_a, diff_b = process_litv(file_a, file_b)
             
-            # 自動展開紀錄，這樣你才看得到診斷訊息
             with st.expander("查看執行紀錄", expanded=True):
                 for l in logs:
                     st.text(l)
