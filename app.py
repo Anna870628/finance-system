@@ -12,46 +12,47 @@ from datetime import datetime
 # ==========================================
 # 頁面基本設定
 # ==========================================
-st.set_page_config(page_title="自動對帳系統 (全自動識別版)", page_icon="📊", layout="wide")
-st.title("📊 自動對帳系統 (全自動識別版)")
+st.set_page_config(page_title="自動對帳系統 (最終版)", page_icon="📊", layout="wide")
+st.title("📊 自動對帳系統 (最終版)")
 
 # 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
 
 # ==========================================
-# 🚗 功能 A：洗車對帳邏輯 (加入自動識別)
+# 🚗 功能 A：洗車對帳邏輯
 # ==========================================
-def process_car_wash(file_1, file_2):
+def process_car_wash(file_billing_upload, file_supplier_upload):
     output = io.BytesIO()
     logs = []
 
     try:
-        # --- 0. 自動識別 A/B 表 ---
-        # 邏輯：檢查哪個檔案有 '請款' 或 '累計明細' 分頁，那個就是 A 表 (請款明細)
+        # --- 0. 自動識別與防呆 ---
+        # 雖然介面已經指定了，但我們還是檢查一下內容確保萬無一失
+        # 邏輯：檢查哪個檔案有 '請款' 分頁，那個就是 Billing (請款明細)
         
-        xl_1 = pd.ExcelFile(file_1)
-        xl_2 = pd.ExcelFile(file_2)
+        xl_billing = pd.ExcelFile(file_billing_upload)
+        xl_supplier = pd.ExcelFile(file_supplier_upload)
         
-        file_a_target = file_1
-        file_b_target = file_2
+        target_billing = file_billing_upload
+        target_supplier = file_supplier_upload
         
-        # 檢查 file_2 是否其實是 A 表
-        is_2_billing = any(s in xl_2.sheet_names for s in ['請款', '累計明細'])
-        is_1_billing = any(s in xl_1.sheet_names for s in ['請款', '累計明細'])
+        # 檢查 file_supplier_upload (使用者上傳的廠商報表) 是否其實是 請款明細?
+        is_supplier_actually_billing = any(s in xl_supplier.sheet_names for s in ['請款', '累計明細'])
+        # 檢查 file_billing_upload (使用者上傳的請款明細) 是否其實是 請款明細?
+        is_billing_actually_billing = any(s in xl_billing.sheet_names for s in ['請款', '累計明細'])
 
-        if is_2_billing and not is_1_billing:
-            logs.append("💡 偵測到檔案位置相反，已自動交換 (File 2 是請款明細)。")
-            file_a_target = file_2
-            file_b_target = file_1
-        elif is_1_billing:
-            logs.append("✅ 檔案順序正確 (File 1 是請款明細)。")
+        if is_supplier_actually_billing and not is_billing_actually_billing:
+            logs.append("💡 偵測到檔案位置相反，已自動交換 (確保讀取正確)。")
+            target_billing = file_supplier_upload
+            target_supplier = file_billing_upload
+        elif is_billing_actually_billing:
+            logs.append("✅ 檔案順序正確。")
         else:
-            # 如果都找不到特徵，就假設順序是對的，但給個警告
-            logs.append("⚠️ 警告：無法自動識別請款明細 (找不到 '請款' 分頁)，將依預設順序處理。")
+            logs.append("⚠️ 警告：無法自動識別請款明細特徵，將依預設順序處理。")
 
-        # 歸零指標 (重要)
-        if hasattr(file_a_target, 'seek'): file_a_target.seek(0)
-        if hasattr(file_b_target, 'seek'): file_b_target.seek(0)
+        # 歸零指標 (Streamlit 必做)
+        if hasattr(target_billing, 'seek'): target_billing.seek(0)
+        if hasattr(target_supplier, 'seek'): target_supplier.seek(0)
 
         # --- 開始標準處理邏輯 ---
         
@@ -64,9 +65,9 @@ def process_car_wash(file_1, file_2):
         target_month_str = datetime.now().strftime("%Y/%m")
 
         logs.append(f"📂 正在讀取檔案...")
-        xls_a = pd.ExcelFile(file_a_target)
+        xls_a = pd.ExcelFile(target_billing) # 讀取請款明細
 
-        # 1. 讀取 A 表 (請款) - 自動找標題
+        # 1. 讀取 請款明細 - 自動找標題
         df_temp = pd.read_excel(xls_a, sheet_name=sheet_name_billing, header=None, usecols="A:E", nrows=20)
         header_row_idx = 2
         for i, row in df_temp.iterrows():
@@ -90,7 +91,7 @@ def process_car_wash(file_1, file_2):
             df_daily[col_date] = pd.to_datetime(df_daily[col_date], errors='coerce').dt.strftime('%Y-%m-%d')
             df_daily = df_daily.dropna(subset=[col_date])
 
-        # 2. 準備 A 表詳細資料
+        # 2. 準備 請款明細 詳細資料
         df_details = pd.read_excel(xls_a, sheet_name=sheet_name_details)
         df_a = df_details.dropna(subset=[col_id]).copy()
         df_a[col_id] = df_a[col_id].astype(str).str.strip()
@@ -103,9 +104,9 @@ def process_car_wash(file_1, file_2):
             df_a[col_phone] = df_a[col_phone].astype(str).str.strip()
         df_a = df_a.drop_duplicates(subset=[col_id, col_plate])
 
-        # 3. 準備 B 表
-        if hasattr(file_b_target, 'seek'): file_b_target.seek(0)
-        df_b_original = pd.read_excel(file_b_target, sheet_name=0, header=2)
+        # 3. 準備 廠商報表
+        if hasattr(target_supplier, 'seek'): target_supplier.seek(0)
+        df_b_original = pd.read_excel(target_supplier, sheet_name=0, header=2)
         df_b_processing = df_b_original.copy()
         df_b_refunds = pd.DataFrame()
         if col_refund in df_b_processing.columns:
@@ -130,7 +131,7 @@ def process_car_wash(file_1, file_2):
             on=[col_id, col_plate], how='outer', indicator=True, suffixes=('_A', '_B')
         )
 
-        logs.append(f"✅ 對帳完成: A表有效筆數 {int(val_count)}, B表退款筆數 {len(df_b_refunds)}")
+        logs.append(f"✅ 對帳完成: 請款明細有效筆數 {int(val_count)}, 廠商報表退款筆數 {len(df_b_refunds)}")
 
         # 5. 寫入 Excel
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -327,23 +328,26 @@ def process_litv(file_a_upload, file_b_upload):
 
 
 # ==========================================
-# 介面顯示邏輯
+# 介面顯示邏輯 (已調整順序)
 # ==========================================
 
 if mode == "🚗 洗車對帳 (Code A)":
     st.header("🚗 洗車訂單對帳")
-    st.info("💡 系統會自動識別「請款明細」與「廠商報表」，您可以隨意上傳。")
+    st.info("💡 邏輯已對調：左邊上傳「廠商報表」，右邊上傳「請款明細」。")
     col1, col2 = st.columns(2)
     
-    # 這裡依照您的需求：左A (請款) / 右B (廠商)
-    # 但因為有自動識別，就算使用者丟反了也沒關係
-    file_a = col1.file_uploader("1. 請款明細 (A表)", type=['xlsx', 'xls'], key="car_a")
-    file_b = col2.file_uploader("2. 廠商報表 (B表)", type=['xlsx', 'xls'], key="car_b")
+    # 【已修改】依照您的要求：
+    # col1 (左) -> 廠商報表 (A)
+    # col2 (右) -> 請款明細 (B)
+    file_supplier = col1.file_uploader("1. 廠商報表 (A表)", type=['xlsx', 'xls'], key="car_supplier")
+    file_billing = col2.file_uploader("2. 請款明細 (B表)", type=['xlsx', 'xls'], key="car_billing")
     
     if st.button("🚀 開始洗車對帳", type="primary"):
-        if file_a and file_b:
+        if file_billing and file_supplier:
             with st.spinner("洗車資料處理中..."):
-                result, logs = process_car_wash(file_a, file_b)
+                # 這裡調用函數時，確保傳入正確的參數順序：
+                # process_car_wash(billing_file, supplier_file)
+                result, logs = process_car_wash(file_billing, file_supplier)
             
             st.expander("執行紀錄", expanded=True).write(logs)
             
