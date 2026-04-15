@@ -21,11 +21,10 @@ def normalize_phone(val):
     # 轉字串並去除前後空白
     s = str(val).strip()
     
-    # 處理浮點數轉字串可能產生的 .0 (例如: 912345678.0 -> 912345678)
+    # 處理浮點數轉字串可能產生的 .0
     if s.endswith(".0"):
         s = s[:-2]
         
-    # 處理科學記號或其他非數字字元
     if len(s) == 9 and s.startswith("9"):
         s = "0" + s
         
@@ -37,11 +36,10 @@ def normalize_phone(val):
 st.set_page_config(page_title="自動對帳系統 (介面優化版)", page_icon="📊", layout="wide")
 st.title("📊 自動對帳系統")
 
-# 側邊欄：選擇功能
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
 
 # ==========================================
-# 🚗 功能 A：洗車對帳邏輯 (支援多個 A 表)
+# 🚗 功能 A：洗車對帳邏輯 (支援多個 A 表 + 方案筆數統計)
 # ==========================================
 def process_car_wash(files_supplier_upload, file_billing_upload):
     output = io.BytesIO()
@@ -71,12 +69,10 @@ def process_car_wash(files_supplier_upload, file_billing_upload):
         df_a_list = []
         for file_supplier in files_supplier_upload:
             file_supplier.seek(0)
-            # 依序讀取每個上傳的 A 表
             df_temp = pd.read_excel(file_supplier, sheet_name=0, header=2)
             df_a_list.append(df_temp)
             logs.append(f"   ↳ 成功讀取: {file_supplier.name} ({len(df_temp)} 筆)")
             
-        # 將所有 A 表垂直合併成一個大表
         df_a_original = pd.concat(df_a_list, ignore_index=True)
         df_a_processing = df_a_original.copy()
         
@@ -93,15 +89,13 @@ def process_car_wash(files_supplier_upload, file_billing_upload):
         if col_plate in df_a.columns:
             df_a[col_plate] = df_a[col_plate].astype(str).str.strip()
         
-        # 手機號碼格式處理
         if col_phone not in df_a.columns:
             df_a[col_phone] = ""
         else:
             df_a[col_phone] = df_a[col_phone].apply(normalize_phone)
 
-        # 避免不同表之間有重複資料，進行去重
         df_a = df_a.drop_duplicates(subset=[col_id, col_plate])
-        logs.append(f"   ↳ 合併去重後，A表總計處理 {len(df_a)} 筆有效資料")
+        logs.append(f"   ↳ 總計合併去重後，A表共有 {len(df_a)} 筆有效資料")
 
         # ---------------------------------------------------------
         # 2. 處理右側檔案 (請款明細 / B表)
@@ -148,13 +142,26 @@ def process_car_wash(files_supplier_upload, file_billing_upload):
             
         df_b = df_b.drop_duplicates(subset=[col_id, col_plate])
 
+        # === 新增：統計洗金寶與三合一的筆數 ===
+        sanheyi_count = 0
+        wash_count = 0
+        
+        # 判斷 B表 中的三合一筆數 (通常在 '金額' 或 '方案(SKU)' 欄位裡)
+        if '金額' in df_b.columns:
+            sanheyi_count += df_b['金額'].astype(str).str.contains('三合一', na=False).sum()
+        elif '方案(SKU)' in df_b.columns:
+            sanheyi_count += df_b['方案(SKU)'].astype(str).str.contains('三合一', na=False).sum()
+            
+        wash_count = len(df_b) - sanheyi_count
+        logs.append(f"   ↳ 📊 方案筆數統計 (依據 B表)：洗金寶 {wash_count} 筆，三合一 {sanheyi_count} 筆")
+
         # ---------------------------------------------------------
         # 3. 合併對帳
         # ---------------------------------------------------------
         cols_keep = [col_id, col_plate, col_phone]
         df_total = pd.merge(
-            df_a[cols_keep], # A表 (廠商報表 - 已合併)
-            df_b[cols_keep], # B表 (請款明細)
+            df_a[cols_keep], 
+            df_b[cols_keep], 
             on=[col_id, col_plate], 
             how='outer', 
             indicator=True, 
@@ -237,7 +244,6 @@ def process_car_wash(files_supplier_upload, file_billing_upload):
     except Exception as e:
         import traceback
         return None, [f"❌ 錯誤: {str(e)}", traceback.format_exc()], None
-
 
 # ==========================================
 # 📺 功能 B：LiTV 對帳邏輯 (維持原樣)
@@ -399,9 +405,8 @@ def process_litv(file_a_upload, file_b_upload):
     except Exception as e:
         return None, [f"❌ 程式執行錯誤: {str(e)}"], None, None, None
 
-
 # ==========================================
-# 介面顯示邏輯 (已開放 A表 多選)
+# 介面顯示邏輯 (已加入日誌動態統計)
 # ==========================================
 
 if mode == "🚗 洗車對帳 (Code A)":
@@ -412,7 +417,6 @@ if mode == "🚗 洗車對帳 (Code A)":
     with col1:
         st.markdown("<h3 style='text-align: center; color: #E74C3C;'>1. CMX報表 (A表)</h3>", unsafe_allow_html=True)
         st.markdown("<p style='text-align: center; color: #7F8C8D;'>✨ 支援同時框選上傳多個檔案</p>", unsafe_allow_html=True)
-        # ✅ 重點修改：加上 accept_multiple_files=True
         files_supplier = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_supplier", label_visibility="collapsed", accept_multiple_files=True)
     
     with col2:
@@ -421,7 +425,6 @@ if mode == "🚗 洗車對帳 (Code A)":
         file_billing = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_billing", label_visibility="collapsed")
     
     if st.button("🚀 開始洗車對帳", type="primary"):
-        # 只要 files_supplier 裡面有檔案，且 file_billing 也有檔案，就開始執行
         if len(files_supplier) > 0 and file_billing:
             with st.spinner("洗車資料處理中..."):
                 result, logs, filename = process_car_wash(files_supplier, file_billing)
