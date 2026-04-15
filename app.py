@@ -25,8 +25,7 @@ def normalize_phone(val):
     if s.endswith(".0"):
         s = s[:-2]
         
-    # 處理科學記號或其他非數字字元 (簡單過濾，視需求調整)
-    # 假設主要是補 0 問題：如果是 9 碼且以 9 開頭，補 0
+    # 處理科學記號或其他非數字字元
     if len(s) == 9 and s.startswith("9"):
         s = "0" + s
         
@@ -42,7 +41,7 @@ st.title("📊 自動對帳系統")
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
 
 # ==========================================
-# 🚗 功能 A：洗車對帳邏輯 (修正版)
+# 🚗 功能 A：洗車對帳邏輯 (徹底修正 A/B 表對應 Bug 版)
 # ==========================================
 def process_car_wash(file_supplier_upload, file_billing_upload):
     output = io.BytesIO()
@@ -66,12 +65,41 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         target_month_str = datetime.now().strftime("%Y/%m")
 
         # ---------------------------------------------------------
-        # 1. 處理右邊檔案 (請款明細 - Logic A)
+        # 1. 處理左側檔案 (廠商報表 / A表)
         # ---------------------------------------------------------
-        logs.append(f"📂 正在讀取右側檔案 (請款明細)...")
-        xls_a = pd.ExcelFile(file_billing_upload)
+        logs.append(f"📂 正在讀取左側檔案 (廠商報表/A表)...")
+        
+        df_a_original = pd.read_excel(file_supplier_upload, sheet_name=0, header=2)
+        df_a_processing = df_a_original.copy()
+        
+        df_a_refunds = pd.DataFrame()
+        if col_refund in df_a_processing.columns:
+            df_a_refunds = df_a_processing[df_a_processing[col_refund].notna()].copy()
+            df_a_filtered = df_a_processing[df_a_processing[col_refund].isna()]
+        else:
+            df_a_filtered = df_a_processing
+        
+        df_a = df_a_filtered.dropna(subset=[col_id]).copy()
+        df_a[col_id] = df_a[col_id].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        
+        if col_plate in df_a.columns:
+            df_a[col_plate] = df_a[col_plate].astype(str).str.strip()
+        
+        # 手機號碼格式處理
+        if col_phone not in df_a.columns:
+            df_a[col_phone] = ""
+        else:
+            df_a[col_phone] = df_a[col_phone].apply(normalize_phone)
 
-        df_temp = pd.read_excel(xls_a, sheet_name=sheet_name_billing, header=None, usecols="A:E", nrows=20)
+        df_a = df_a.drop_duplicates(subset=[col_id, col_plate])
+
+        # ---------------------------------------------------------
+        # 2. 處理右側檔案 (請款明細 / B表)
+        # ---------------------------------------------------------
+        logs.append(f"📂 正在讀取右側檔案 (請款明細/B表)...")
+        xls_b = pd.ExcelFile(file_billing_upload)
+
+        df_temp = pd.read_excel(xls_b, sheet_name=sheet_name_billing, header=None, usecols="A:E", nrows=20)
         header_row_idx = 2
         for i, row in df_temp.iterrows():
             row_str = " ".join([str(x) for x in row.values])
@@ -79,7 +107,7 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
                 header_row_idx = i
                 break
         
-        df_daily = pd.read_excel(xls_a, sheet_name=sheet_name_billing, header=header_row_idx, usecols="A:E")
+        df_daily = pd.read_excel(xls_b, sheet_name=sheet_name_billing, header=header_row_idx, usecols="A:E")
         
         if len(df_daily.columns) >= 5:
             val_count = pd.to_numeric(df_daily.iloc[:, 1], errors='coerce').fillna(0).sum()
@@ -94,50 +122,20 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
             df_daily[col_date] = pd.to_datetime(df_daily[col_date], errors='coerce').dt.strftime('%Y-%m-%d')
             df_daily = df_daily.dropna(subset=[col_date])
 
-        df_details = pd.read_excel(xls_a, sheet_name=sheet_name_details)
-        df_a = df_details.dropna(subset=[col_id]).copy()
+        df_details = pd.read_excel(xls_b, sheet_name=sheet_name_details)
+        df_b = df_details.dropna(subset=[col_id]).copy()
         
-        df_a[col_id] = df_a[col_id].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        df_a = df_a[~df_a[col_id].str.contains('合計|Total|總計', case=False, na=False)]
-        
-        if col_plate in df_a.columns:
-            df_a[col_plate] = df_a[col_plate].astype(str).str.strip()
-            
-        # --- 修正手機號碼 A ---
-        if col_phone not in df_a.columns:
-            df_a[col_phone] = ""
-        else:
-            # 使用自訂函式處理手機格式
-            df_a[col_phone] = df_a[col_phone].apply(normalize_phone)
-            
-        df_a = df_a.drop_duplicates(subset=[col_id, col_plate])
-
-        # ---------------------------------------------------------
-        # 2. 處理左邊檔案 (廠商報表 - Logic B)
-        # ---------------------------------------------------------
-        logs.append(f"📂 正在讀取左側檔案 (廠商報表)...")
-        
-        df_b_original = pd.read_excel(file_supplier_upload, sheet_name=0, header=2)
-        df_b_processing = df_b_original.copy()
-        
-        df_b_refunds = pd.DataFrame()
-        if col_refund in df_b_processing.columns:
-            df_b_refunds = df_b_processing[df_b_processing[col_refund].notna()].copy()
-            df_b_filtered = df_b_processing[df_b_processing[col_refund].isna()]
-        else:
-            df_b_filtered = df_b_processing
-        
-        df_b = df_b_filtered.dropna(subset=[col_id]).copy()
         df_b[col_id] = df_b[col_id].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        df_b[col_plate] = df_b[col_plate].astype(str).str.strip()
+        df_b = df_b[~df_b[col_id].str.contains('合計|Total|總計', case=False, na=False)]
         
-        # --- 修正手機號碼 B ---
+        if col_plate in df_b.columns:
+            df_b[col_plate] = df_b[col_plate].astype(str).str.strip()
+            
         if col_phone not in df_b.columns:
             df_b[col_phone] = ""
         else:
-            # 使用自訂函式處理手機格式
             df_b[col_phone] = df_b[col_phone].apply(normalize_phone)
-
+            
         df_b = df_b.drop_duplicates(subset=[col_id, col_plate])
 
         # ---------------------------------------------------------
@@ -145,15 +143,15 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         # ---------------------------------------------------------
         cols_keep = [col_id, col_plate, col_phone]
         df_total = pd.merge(
-            df_a[cols_keep], 
-            df_b[cols_keep],
+            df_a[cols_keep], # A表 (廠商報表)
+            df_b[cols_keep], # B表 (請款明細)
             on=[col_id, col_plate], 
             how='outer', 
             indicator=True, 
             suffixes=('_A', '_B')
         )
 
-        logs.append(f"✅ 對帳完成: 請款 {len(df_a)} 筆, 廠商 {len(df_b)} 筆")
+        logs.append(f"✅ 對帳完成: CMX(A表) {len(df_a)} 筆, TMS(B表) {len(df_b)} 筆")
 
         # ---------------------------------------------------------
         # 4. 寫入 Excel (字體調整與格式優化)
@@ -161,38 +159,20 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             wb = writer.book
             
-            # 【Excel 字體設定：調整為 12】
+            # 【Excel 字體設定】
             base_font_size = 12
             header_font_size = 14
 
-            fmt_header = wb.add_format({
-                'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 
-                'align': 'center', 'valign': 'vcenter', 
-                'font_size': header_font_size
-            })
-            
-            fmt_content = wb.add_format({
-                'border': 1, 'align': 'center', 'valign': 'vcenter', 
-                'font_size': base_font_size
-            })
-            
-            fmt_currency = wb.add_format({
-                'num_format': '#,##0', 'border': 1, 'align': 'right', 'valign': 'vcenter',
-                'font_size': base_font_size
-            })
-            
-            # 差異標示 (有框線)
+            fmt_header = wb.add_format({'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'font_size': header_font_size})
+            fmt_content = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'font_size': base_font_size})
+            fmt_currency = wb.add_format({'num_format': '#,##0', 'border': 1, 'align': 'right', 'valign': 'vcenter', 'font_size': base_font_size})
             fmt_blue = wb.add_format({'bg_color': '#DDEBF7', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'font_size': base_font_size})
             fmt_pink = wb.add_format({'bg_color': '#FCE4D6', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'font_size': base_font_size})
-            
-            # 月份格式
             fmt_text_month = wb.add_format({'num_format': '@', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'font_size': base_font_size})
             fmt_bold_total = wb.add_format({'bold': True, 'num_format': '#,##0', 'border': 1, 'bg_color': '#FFF2CC', 'align': 'right', 'valign': 'vcenter', 'font_size': base_font_size})
 
             # --- Sheet 1: 請款 ---
             ws1 = wb.add_worksheet('請款')
-            # 這裡還是用手動寫入比較保險，或是維持原樣但調整寬度
-            
             top_headers = ['統計月份', '轉檔筆數', '轉檔請款金額', '簡訊請款金額', '合計金額']
             top_values = [target_month_str, val_count, val_billing, val_sms, val_total]
             
@@ -210,7 +190,6 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
             for col_idx, col_name in enumerate(df_daily.columns):
                 ws1.write(3, col_idx, col_name, fmt_header)
             
-            # 寫入請款資料
             for r, row in enumerate(df_daily.values):
                 for c, val in enumerate(row):
                     ws1.write(r + 4, c, val, fmt_content)
@@ -218,51 +197,46 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
             ws1.set_column('A:A', 25) 
             ws1.set_column('B:E', 25) 
 
-            # --- Sheet 2: 對帳總表 (完全重寫寫入邏輯以解決框線問題) ---
+            # --- Sheet 2: 對帳總表 ---
             ws2 = wb.add_worksheet('對帳總表')
-            
-            # 寫入標題
             columns = df_total.columns.tolist()
             for c_idx, col_name in enumerate(columns):
                 ws2.write(0, c_idx, col_name, fmt_header)
             
-            # 設定欄寬 (25px 左右)
             ws2.set_column(0, len(columns)-1, 25)
-            ws2.set_row(0, 22) # 標題列高一點
+            ws2.set_row(0, 22)
 
-            # 逐列逐格寫入資料
             for r_idx, row in df_total.iterrows():
                 merge_status = row['_merge']
                 
-                # 決定該列的格式
+                # left_only 藍色 (只有 A表/CMX 有)
                 if merge_status == 'left_only':
                     current_fmt = fmt_blue
+                # right_only 粉色 (只有 B表/TMS 有)
                 elif merge_status == 'right_only':
                     current_fmt = fmt_pink
                 else:
                     current_fmt = fmt_content
                 
                 excel_row = r_idx + 1
-                
-                # 設定列高 (18px)
                 ws2.set_row(excel_row, 18) 
 
                 for c_idx, val in enumerate(row):
-                    # 處理 NaN 變空字串
                     if pd.isna(val):
                         write_val = ""
                     else:
                         write_val = val
-                    
-                    # 寫入儲存格並套用格式 (這樣框線只會跟著有資料的格子)
                     ws2.write(excel_row, c_idx, write_val, current_fmt)
 
-            # 其他 Sheet
+            # --- Sheet 3 & 4: 差異表拆分 (Bug已修正) ---
+            # left_only 表示在 df_a (CMX / A表) 但不在 df_b
             df_total[df_total['_merge'] == 'left_only'].drop(columns=['_merge']).to_excel(writer, sheet_name='僅A表有', index=False)
+            
+            # right_only 表示在 df_b (TMS / B表) 但不在 df_a
             df_total[df_total['_merge'] == 'right_only'].drop(columns=['_merge']).to_excel(writer, sheet_name='僅B表有', index=False)
             
-            if not df_b_refunds.empty:
-                df_b_refunds.to_excel(writer, sheet_name='B表退款排除名單', index=False)
+            if not df_a_refunds.empty:
+                df_a_refunds.to_excel(writer, sheet_name='A表退款排除名單', index=False)
 
         return output.getvalue(), logs, output_filename
 
@@ -271,7 +245,7 @@ def process_car_wash(file_supplier_upload, file_billing_upload):
         return None, [f"❌ 錯誤: {str(e)}", traceback.format_exc()], None
 
 # ==========================================
-# 📺 功能 B：LiTV 對帳邏輯 (未變動，僅保留結構)
+# 📺 功能 B：LiTV 對帳邏輯 (未變動)
 # ==========================================
 def process_litv(file_a_upload, file_b_upload):
     output_buffer = io.BytesIO()
@@ -388,8 +362,6 @@ def process_litv(file_a_upload, file_b_upload):
         # --- 6. 寫入 Excel (字體調整) ---
         logs.append("正在寫入 Excel...")
         yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
-        
-        # 定義 18號字體
         font_style = Font(size=18)
 
         if "CMX對帳明細" in wb.sheetnames: del wb["CMX對帳明細"]
@@ -401,7 +373,6 @@ def process_litv(file_a_upload, file_b_upload):
             row_data = [data[h] for h in headers]
             ws_new.append(row_data)
             
-            # 設定這行字體為 18
             for cell in ws_new[ws_new.max_row]:
                 cell.font = font_style
                 if data['is_diff']:
@@ -421,7 +392,6 @@ def process_litv(file_a_upload, file_b_upload):
                     p_val = str(ws_acg.cell(row=r_idx, column=p_idx).value).strip()
                     k_val = str(ws_acg.cell(row=r_idx, column=k_idx).value).strip()
                     
-                    # 設定字體
                     for cell in ws_acg[r_idx]:
                         cell.font = font_style
 
@@ -447,7 +417,6 @@ if mode == "🚗 洗車對帳 (Code A)":
     col1, col2 = st.columns(2)
     
     with col1:
-        # 使用 Markdown 自訂大字體標題
         st.markdown("<h3 style='text-align: center; color: #E74C3C;'>1. CMX報表 (A表)</h3>", unsafe_allow_html=True)
         file_supplier = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_supplier", label_visibility="collapsed")
     
