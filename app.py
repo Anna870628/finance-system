@@ -86,8 +86,9 @@ def process_car_wash(files_supplier_upload, file_billing_upload):
         df_a = df_a_filtered.dropna(subset=[col_id]).copy()
         df_a[col_id] = df_a[col_id].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         
+        # ⭐ 修正重點 1：A表車牌標準化 (去除連字號與空白，並轉大寫)
         if col_plate in df_a.columns:
-            df_a[col_plate] = df_a[col_plate].astype(str).str.strip()
+            df_a[col_plate] = df_a[col_plate].astype(str).str.replace(r'[-\s]', '', regex=True).str.upper()
         
         if col_phone not in df_a.columns:
             df_a[col_phone] = ""
@@ -132,8 +133,9 @@ def process_car_wash(files_supplier_upload, file_billing_upload):
         df_b[col_id] = df_b[col_id].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         df_b = df_b[~df_b[col_id].str.contains('合計|Total|總計', case=False, na=False)]
         
+        # ⭐ 修正重點 2：B表車牌標準化 (去除連字號與空白，並轉大寫)
         if col_plate in df_b.columns:
-            df_b[col_plate] = df_b[col_plate].astype(str).str.strip()
+            df_b[col_plate] = df_b[col_plate].astype(str).str.replace(r'[-\s]', '', regex=True).str.upper()
             
         if col_phone not in df_b.columns:
             df_b[col_phone] = ""
