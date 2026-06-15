@@ -29,15 +29,15 @@ def normalize_phone(val):
 # ==========================================
 # 頁面基本設定
 # ==========================================
-st.set_page_config(page_title="自動對帳系統 (升級版)", page_icon="📊", layout="wide")
+st.set_page_config(page_title="自動對帳系統 (最終升級版)", page_icon="📊", layout="wide")
 st.title("📊 自動對帳系統")
 
 mode = st.sidebar.radio("請選擇對帳功能：", ["🚗 洗車與三合一對帳 (Code A)", "📺 LiTV 對帳 (Code B)"])
 
 # ==========================================
-# 🚗 功能 A：洗車與三合一對帳邏輯 (支援動態表單、分流、新制車牌)
+# 🚗 功能 A：洗車與三合一對帳邏輯 (分離上傳、限定欄位、新制車牌)
 # ==========================================
-def process_car_wash(files_supplier_upload, file_billing_upload, match_mode):
+def process_car_wash(files_wash_a, files_3in1_a, file_billing_upload, match_mode):
     output = io.BytesIO()
     logs = []
     output_filename = "洗車與三合一_對帳結果.xlsx"
@@ -56,59 +56,63 @@ def process_car_wash(files_supplier_upload, file_billing_upload, match_mode):
         target_month_str = datetime.now().strftime("%Y/%m")
 
         # ---------------------------------------------------------
-        # 1. 處理左側檔案 (廠商報表 / A表) - 支援多檔合併與分流
+        # 1. 定義 A 表讀取與清理邏輯
         # ---------------------------------------------------------
-        logs.append(f"📂 正在讀取左側檔案 (廠商報表/A表)，共收到 {len(files_supplier_upload)} 份檔案...")
-        
-        df_a_list = []
-        for file_supplier in files_supplier_upload:
-            file_supplier.seek(0)
-            df_temp = pd.read_excel(file_supplier, sheet_name=0, header=2)
-            df_a_list.append(df_temp)
-            logs.append(f"   ↳ 成功讀取: {file_supplier.name} ({len(df_temp)} 筆)")
-            
-        df_a_original = pd.concat(df_a_list, ignore_index=True)
-        df_a_processing = df_a_original.copy()
-        
-        # 處理退款
-        df_a_refunds = pd.DataFrame()
-        if col_refund in df_a_processing.columns:
-            df_a_refunds = df_a_processing[df_a_processing[col_refund].notna()].copy()
-            df_a_filtered = df_a_processing[df_a_processing[col_refund].isna()]
-        else:
-            df_a_filtered = df_a_processing
-        
-        df_a = df_a_filtered.dropna(subset=[col_id]).copy()
-        df_a[col_id] = df_a[col_id].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        
-        # 車牌與手機標準化
-        if col_plate in df_a.columns:
-            df_a[col_plate] = df_a[col_plate].astype(str).str.replace(r'[-\s]', '', regex=True).str.upper()
-        else:
-            df_a[col_plate] = ""
-            
-        if col_phone not in df_a.columns:
-            df_a[col_phone] = ""
-        else:
-            df_a[col_phone] = df_a[col_phone].apply(normalize_phone)
+        def prepare_a_data(file_list, label):
+            if not file_list: 
+                return pd.DataFrame(), pd.DataFrame()
+                
+            logs.append(f"📂 正在讀取【{label} A表】，共 {len(file_list)} 份檔案...")
+            df_list = []
+            for f in file_list:
+                f.seek(0)
+                df_temp = pd.read_excel(f, sheet_name=0, header=2)
+                df_list.append(df_temp)
+                logs.append(f"   ↳ 成功讀取: {f.name} ({len(df_temp)} 筆)")
+                
+            df_raw = pd.concat(df_list, ignore_index=True)
 
-        # 🎯 核心：依據模式產生「比對用車牌」
+            df_ref = pd.DataFrame()
+            if col_refund in df_raw.columns:
+                df_ref = df_raw[df_raw[col_refund].notna()].copy()
+                df_filtered = df_raw[df_raw[col_refund].isna()]
+            else:
+                df_filtered = df_raw
+
+            df_cln = df_filtered.dropna(subset=[col_id]).copy()
+            df_cln[col_id] = df_cln[col_id].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+
+            if col_plate in df_cln.columns:
+                df_cln[col_plate] = df_cln[col_plate].astype(str).str.replace(r'[-\s]', '', regex=True).str.upper()
+            else:
+                df_cln[col_plate] = ""
+
+            if col_phone not in df_cln.columns:
+                df_cln[col_phone] = ""
+            else:
+                df_cln[col_phone] = df_cln[col_phone].apply(normalize_phone)
+
+            # 依據模式產生「比對用車牌」
+            if match_mode == "廠商新制 (手機後7碼-車牌)":
+                df_cln['比對用車牌'] = df_cln.apply(
+                    lambda r: f"{str(r[col_phone])[-7:]}-{r[col_plate]}" if len(str(r[col_phone])) >= 7 else f"{r[col_phone]}-{r[col_plate]}", 
+                    axis=1
+                )
+            else:
+                df_cln['比對用車牌'] = df_cln[col_plate]
+
+            df_cln = df_cln.drop_duplicates(subset=[col_id, '比對用車牌'])
+            logs.append(f"   ↳ 【{label} A表】合併去重後，共 {len(df_cln)} 筆有效資料")
+            return df_cln, df_ref
+
+        # 讀取洗車與三合一的 A 表
+        df_a_wash, df_ref_wash = prepare_a_data(files_wash_a, "洗車")
+        df_a_3in1, df_ref_3in1 = prepare_a_data(files_3in1_a, "三合一")
+        
+        # 合併兩邊的退款名單
+        df_a_refunds = pd.concat([df_ref_wash, df_ref_3in1], ignore_index=True)
         if match_mode == "廠商新制 (手機後7碼-車牌)":
-            df_a['比對用車牌'] = df_a.apply(lambda r: f"{str(r[col_phone])[-7:]}-{r[col_plate]}" if len(str(r[col_phone])) >= 7 else f"{r[col_phone]}-{r[col_plate]}", axis=1)
-            logs.append("   ⚠️ 已啟用新制：A表比對鍵轉換為【手機後7碼-車牌】格式")
-        else:
-            df_a['比對用車牌'] = df_a[col_plate]
-
-        # 🎯 核心：區分「洗車」與「三合一」
-        if '方案(SKU)' in df_a.columns:
-            mask_3in1 = df_a['方案(SKU)'].astype(str).str.contains('三合一', na=False)
-            df_a_3in1 = df_a[mask_3in1].drop_duplicates(subset=[col_id, '比對用車牌']).copy()
-            df_a_wash = df_a[~mask_3in1].drop_duplicates(subset=[col_id, '比對用車牌']).copy()
-        else:
-            df_a_3in1 = pd.DataFrame()
-            df_a_wash = df_a.drop_duplicates(subset=[col_id, '比對用車牌']).copy()
-            
-        logs.append(f"   ↳ 分流完成：A表洗車 {len(df_a_wash)} 筆，A表三合一 {len(df_a_3in1)} 筆")
+             logs.append("   ⚠️ 已啟用新制：A表比對鍵轉換為【手機後7碼-車牌】格式")
 
         # ---------------------------------------------------------
         # 2. 處理右側檔案 (請款明細 / B表) - 動態抓取工作表
@@ -117,14 +121,11 @@ def process_car_wash(files_supplier_upload, file_billing_upload, match_mode):
         xls_b = pd.ExcelFile(file_billing_upload)
         available_sheets = xls_b.sheet_names
         
-        # 尋找 摘要表
         sheet_name_billing = '請款' if '請款' in available_sheets else available_sheets[0]
 
-        # 尋找 洗車明細表 (排除三合一名稱)
         wash_candidates = [s for s in available_sheets if ('明細' in s or 'detail' in s.lower()) and '三合一' not in s]
         sheet_name_wash = wash_candidates[0] if wash_candidates else (available_sheets[1] if len(available_sheets)>1 else available_sheets[0])
         
-        # 尋找 三合一明細表
         three_in_one_candidates = [s for s in available_sheets if '三合一' in s]
         sheet_name_3in1 = three_in_one_candidates[0] if three_in_one_candidates else None
         
@@ -148,10 +149,11 @@ def process_car_wash(files_supplier_upload, file_billing_upload, match_mode):
             val_count, val_billing, val_sms, val_total = 0, 0, 0, 0
 
         # ---------------------------------------------------------
-        # 3. 定義子對帳函式 (為了讓洗車與三合一能重複使用邏輯)
+        # 3. 定義子對帳函式 (限定必要欄位！)
         # ---------------------------------------------------------
         def merge_datasets(df_a_sub, sheet_name_b):
-            if not sheet_name_b: return pd.DataFrame(), pd.DataFrame()
+            if df_a_sub.empty or not sheet_name_b: 
+                return pd.DataFrame(), pd.DataFrame()
             
             df_b_raw = pd.read_excel(xls_b, sheet_name=sheet_name_b)
             df_b_sub = df_b_raw.dropna(subset=[col_id]).copy()
@@ -166,21 +168,33 @@ def process_car_wash(files_supplier_upload, file_billing_upload, match_mode):
             else:
                 df_b_sub['比對用車牌'] = ""
                 
+            if col_phone not in df_b_sub.columns:
+                df_b_sub[col_phone] = ""
+            else:
+                df_b_sub[col_phone] = df_b_sub[col_phone].apply(normalize_phone)
+                
             df_b_sub = df_b_sub.drop_duplicates(subset=[col_id, '比對用車牌'])
             
-            cols_keep_b = [col_id, '比對用車牌']
-            if col_phone in df_b_sub.columns: cols_keep_b.append(col_phone)
+            # 🎯 核心修正：只保留必要的欄位去對帳，讓畫面乾淨
+            base_cols_keep = [col_id, col_plate, col_phone]
+            cols_a = [c for c in base_cols_keep if c in df_a_sub.columns] + ['比對用車牌']
+            cols_b = [c for c in base_cols_keep if c in df_b_sub.columns] + ['比對用車牌']
             
-            cols_keep_b = list(set(cols_keep_b).intersection(df_b_sub.columns))
+            # 去除重複的欄位名
+            cols_a = list(dict.fromkeys(cols_a))
+            cols_b = list(dict.fromkeys(cols_b))
             
             df_total = pd.merge(
-                df_a_sub, 
-                df_b_sub[cols_keep_b], 
+                df_a_sub[cols_a], 
+                df_b_sub[cols_b], 
                 on=[col_id, '比對用車牌'], 
                 how='outer', 
                 indicator=True, 
                 suffixes=('_A', '_B')
             )
+            
+            # 丟掉內部的「比對用車牌」欄位，不顯示在報表上
+            df_total = df_total.drop(columns=['比對用車牌'], errors='ignore')
             return df_total, df_b_sub
 
         # 執行兩路對帳
@@ -188,7 +202,7 @@ def process_car_wash(files_supplier_upload, file_billing_upload, match_mode):
         df_total_3in1, df_b_3in1_clean = merge_datasets(df_a_3in1, sheet_name_3in1)
 
         logs.append(f"   ↳ 📊 B表有效筆數統計：洗金寶 {len(df_b_wash_clean)} 筆，三合一 {len(df_b_3in1_clean)} 筆")
-        logs.append(f"✅ 雙路對帳完成！")
+        logs.append(f"✅ 雙路對帳完成！輸出報表已限定必填欄位。")
 
         # ---------------------------------------------------------
         # 4. 寫入 Excel (模組化寫入)
@@ -196,7 +210,6 @@ def process_car_wash(files_supplier_upload, file_billing_upload, match_mode):
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             wb = writer.book
             
-            # 定義樣式
             fmt_header = wb.add_format({'bold': True, 'bg_color': '#EFEFEF', 'border': 1, 'align': 'center', 'valign': 'vcenter', 'font_size': 12})
             fmt_content = wb.add_format({'border': 1, 'align': 'center', 'valign': 'vcenter', 'font_size': 11})
             fmt_currency = wb.add_format({'num_format': '#,##0', 'border': 1, 'align': 'right', 'valign': 'vcenter', 'font_size': 11})
@@ -267,7 +280,6 @@ def process_car_wash(files_supplier_upload, file_billing_upload, match_mode):
 # 📺 功能 B：LiTV 對帳邏輯 (維持不變)
 # ==========================================
 def process_litv(file_a_upload, file_b_upload):
-    # (此段維持你原本的 LiTV 程式碼完全不變)
     output_buffer = io.BytesIO()
     logs = []
     output_filename = "LiTV_CMX確認.xlsx"
@@ -388,20 +400,23 @@ def process_litv(file_a_upload, file_b_upload):
 if mode == "🚗 洗車與三合一對帳 (Code A)":
     st.header("🚗 洗車與三合一 聯合對帳")
     
-    # 🎯 新增的控制選項：讓你可以靈活切換比對模式
     match_mode = st.radio(
         "⚙️ 請選擇廠商車牌比對模式：", 
         ["預設模式 (純車牌比對)", "廠商新制 (手機後7碼-車牌)"],
         horizontal=True
     )
     
-    st.info("💡 邏輯：A表可同時上傳【洗車】與【三合一】的檔案，系統會自動透過 SKU 分流並同時對帳。")
+    st.info("💡 邏輯：將【洗車】與【三合一】的 A 表分開上傳，系統會自動核對同一張 B 表裡的不同明細。")
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("<h3 style='text-align: center; color: #E74C3C;'>1. CMX報表 (A表)</h3>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #7F8C8D;'>✨ 支援同時框選上傳多個檔案</p>", unsafe_allow_html=True)
-        files_supplier = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_supplier", label_visibility="collapsed", accept_multiple_files=True)
+        st.markdown("<h3 style='text-align: center; color: #E74C3C;'>1. CMX報表 (A表上傳區)</h3>", unsafe_allow_html=True)
+        
+        st.markdown("**🚗 洗車 A 表 (支援多選)**")
+        files_wash = st.file_uploader(" ", type=['xlsx', 'xls'], key="wash_supplier", label_visibility="collapsed", accept_multiple_files=True)
+        
+        st.markdown("**📦 三合一 A 表 (支援多選，若無則免傳)**")
+        files_3in1 = st.file_uploader(" ", type=['xlsx', 'xls'], key="3in1_supplier", label_visibility="collapsed", accept_multiple_files=True)
     
     with col2:
         st.markdown("<h3 style='text-align: center; color: #2E86C1;'>2. TMS請款明細 (B表)</h3>", unsafe_allow_html=True)
@@ -409,14 +424,15 @@ if mode == "🚗 洗車與三合一對帳 (Code A)":
         file_billing = st.file_uploader(" ", type=['xlsx', 'xls'], key="car_billing", label_visibility="collapsed")
     
     if st.button("🚀 開始自動對帳", type="primary"):
-        if len(files_supplier) > 0 and file_billing:
-            with st.spinner("資料處理與分流中..."):
-                result, logs, filename = process_car_wash(files_supplier, file_billing, match_mode)
+        # 只要有一種 A表 有上傳，並且 B表 有上傳，即可啟動
+        if (len(files_wash) > 0 or len(files_3in1) > 0) and file_billing:
+            with st.spinner("資料比對中，請稍候..."):
+                result, logs, filename = process_car_wash(files_wash, files_3in1, file_billing, match_mode)
             
             st.expander("執行紀錄 (點擊展開)", expanded=True).write(logs)
             
             if result:
-                st.success("🎉 對帳完成！已同時產出洗車與三合一的結果分頁。")
+                st.success("🎉 對帳完成！")
                 st.download_button(
                     label=f"📥 下載結果 ({filename})",
                     data=result,
@@ -424,7 +440,7 @@ if mode == "🚗 洗車與三合一對帳 (Code A)":
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         else:
-            st.warning("⚠️ 請確認 A表 與 B表 都已完成上傳。")
+            st.warning("⚠️ 請確認「至少一份 A 表」與「B 表」都已完成上傳。")
 
 elif mode == "📺 LiTV 對帳 (Code B)":
     st.header("📺 LiTV 訂單對帳")
