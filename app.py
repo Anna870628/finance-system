@@ -258,7 +258,7 @@ def process_car_wash(files_wash_a, files_3in1_a, file_billing_upload, match_mode
         return None, [f"❌ 錯誤: {str(e)}", traceback.format_exc()], None
 
 # ==========================================
-# 📺 功能 B：LiTV 對帳邏輯 
+# 📺 功能 B：LiTV 對帳邏輯
 # ==========================================
 def process_litv(file_a_upload, file_b_upload):
     output_buffer = io.BytesIO()
@@ -373,9 +373,8 @@ def process_litv(file_a_upload, file_b_upload):
     except Exception as e:
         return None, [f"❌ 程式執行錯誤: {str(e)}"], None, None, None
 
-
 # ==========================================
-# 💰 功能 C：和泰點數對帳邏輯 (動態標題列修正版)
+# 💰 功能 C：和泰點數對帳邏輯 (終極防呆容錯版)
 # ==========================================
 def process_points(file_a_upload, file_b_upload):
     output_buffer = io.BytesIO()
@@ -393,37 +392,74 @@ def process_points(file_a_upload, file_b_upload):
         header_idx = 0
         for i, row in df_temp.iterrows():
             row_vals = [str(x).strip() for x in row.values if pd.notna(x)]
-            if '和泰點數' in row_vals or '訂單編號' in row_vals:
+            # 若該列包含「訂單」相關字眼，且包含「金額」或「點數」，極大機率是標題列
+            if any('訂單' in x for x in row_vals) and (any('金額' in x for x in row_vals) or any('點數' in x for x in row_vals)):
                 header_idx = i
                 break
                 
         file_a_upload.seek(0)
         df_a = pd.read_excel(file_a_upload, header=header_idx)
-        df_a.columns = df_a.columns.astype(str).str.strip()
         
-        if '和泰點數' not in df_a.columns:
-            logs.append(f"❌ 錯誤：無法在附件一中找到「和泰點數」欄位 (系統判定標題在第 {header_idx+1} 列)。請確認報表格式！")
+        # 移除欄位名稱中的所有不可見空白 (極端容錯)
+        df_a.columns = df_a.columns.astype(str).str.replace(r'\s+', '', regex=True)
+        
+        # 動態抓取對應欄位 (模糊比對，不怕欄位名稱微調)
+        col_id = next((c for c in df_a.columns if '訂單' in c and '編號' in c), None)
+        col_pts = next((c for c in df_a.columns if '點數' in c), None)
+        col_refund = next((c for c in df_a.columns if '退款' in c), None)
+        
+        # 檢核是否上傳錯誤檔案 (防呆機制)
+        if not col_pts:
+            sample_cols = ", ".join(df_a.columns.tolist()[:5])
+            logs.append(f"❌ 錯誤：無法在附件一中找到包含「點數」的欄位。(抓到的欄位：{sample_cols}...)\n💡 防呆提示：請確認您是否不小心將「洗車」或「LiTV」的報表上傳到點數對帳區了？")
             return None, logs, 0, None
             
-        logs.append(f"   ↳ 成功鎖定 A 表標題列於第 {header_idx+1} 列")
+        if not col_id:
+            logs.append("❌ 錯誤：無法在附件一中找到包含「訂單編號」的欄位。請確認報表格式！")
+            return None, logs, 0, None
+
+        # 為了後續邏輯統一，將找到的欄位統一名稱
+        rename_dict = {col_id: '訂單編號', col_pts: '和泰點數'}
+        if col_refund:
+            rename_dict[col_refund] = '退款時間'
+        df_a.rename(columns=rename_dict, inplace=True)
+            
+        logs.append(f"   ↳ 成功鎖定 A 表標題列於第 {header_idx+1} 列，並將「{col_pts}」欄位對齊。")
 
         logs.append("📂 正在讀取【特約商點數歷程 (附件二)】...")
         df_b = pd.read_excel(file_b_upload)
-        df_b.columns = df_b.columns.astype(str).str.strip()
+        df_b.columns = df_b.columns.astype(str).str.replace(r'\s+', '', regex=True)
         
         # --- 處理附件一 ---
         logs.append("🧹 正在清理附件一：過濾已退款與負點數資料...")
         df_a['和泰點數'] = pd.to_numeric(df_a['和泰點數'], errors='coerce').fillna(0)
-        df_a_clean = df_a[df_a['退款時間'].isna() & (df_a['和泰點數'] >= 0)].copy()
+        
+        if '退款時間' in df_a.columns:
+            df_a_clean = df_a[df_a['退款時間'].isna() & (df_a['和泰點數'] >= 0)].copy()
+        else:
+            df_a_clean = df_a[df_a['和泰點數'] >= 0].copy()
         
         # --- 處理附件二 ---
         logs.append("🧹 正在清理附件二：過濾負點數與「點數交易取消」資料，並加總同訂單點數...")
-        df_b['兌點數'] = pd.to_numeric(df_b['兌點數'], errors='coerce').fillna(0)
-        df_b_clean = df_b[(df_b['兌點數'] >= 0) & (df_b['點數交易類型'] != '點數交易取消')].copy()
+        
+        col_b_pts = next((c for c in df_b.columns if '兌點' in c or '點數' in c), '兌點數')
+        col_b_type = next((c for c in df_b.columns if '交易類型' in c or '狀態' in c), '點數交易類型')
+        col_b_id = next((c for c in df_b.columns if '交易序號' in c or '單號' in c), '特約商交易序號')
+        
+        if col_b_pts not in df_b.columns or col_b_id not in df_b.columns:
+            logs.append(f"❌ 錯誤：附件二缺乏必要欄位，目前欄位有：{', '.join(df_b.columns[:5])}")
+            return None, logs, 0, None
+
+        df_b[col_b_pts] = pd.to_numeric(df_b[col_b_pts], errors='coerce').fillna(0)
+        
+        if col_b_type in df_b.columns:
+            df_b_clean = df_b[(df_b[col_b_pts] >= 0) & (df_b[col_b_type] != '點數交易取消')].copy()
+        else:
+            df_b_clean = df_b[df_b[col_b_pts] >= 0].copy()
         
         # 加總同一筆交易序號的點數
-        df_b_grouped = df_b_clean.groupby('特約商交易序號', as_index=False)['兌點數'].sum()
-        df_b_grouped.rename(columns={'兌點數': '附件二_總兌點數'}, inplace=True)
+        df_b_grouped = df_b_clean.groupby(col_b_id, as_index=False)[col_b_pts].sum()
+        df_b_grouped.rename(columns={col_b_pts: '附件二_總兌點數', col_b_id: '特約商交易序號'}, inplace=True)
         
         # --- 比對資料 ---
         logs.append("🔄 正在進行比對 (Outer Join)...")
@@ -483,7 +519,6 @@ def process_points(file_a_upload, file_b_upload):
     except Exception as e:
         import traceback
         return None, [f"❌ 程式執行錯誤: {str(e)}", traceback.format_exc()], 0, None
-
 
 # ==========================================
 # 介面顯示邏輯
