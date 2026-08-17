@@ -37,12 +37,12 @@ mode = st.sidebar.radio(
     [
         "🚗 洗車與三合一對帳 (Code A)", 
         "📺 LiTV 對帳 (Code B)", 
-        "💰 和泰點數對帳 (Code C)"  # <--- 新增點數對帳選項
+        "💰 和泰點數對帳 (Code C)"
     ]
 )
 
 # ==========================================
-# 🚗 功能 A：洗車與三合一對帳邏輯 (維持不變)
+# 🚗 功能 A：洗車與三合一對帳邏輯
 # ==========================================
 def process_car_wash(files_wash_a, files_3in1_a, file_billing_upload, match_mode):
     output = io.BytesIO()
@@ -258,7 +258,7 @@ def process_car_wash(files_wash_a, files_3in1_a, file_billing_upload, match_mode
         return None, [f"❌ 錯誤: {str(e)}", traceback.format_exc()], None
 
 # ==========================================
-# 📺 功能 B：LiTV 對帳邏輯 (維持不變)
+# 📺 功能 B：LiTV 對帳邏輯 
 # ==========================================
 def process_litv(file_a_upload, file_b_upload):
     output_buffer = io.BytesIO()
@@ -373,8 +373,9 @@ def process_litv(file_a_upload, file_b_upload):
     except Exception as e:
         return None, [f"❌ 程式執行錯誤: {str(e)}"], None, None, None
 
+
 # ==========================================
-# 💰 功能 C：和泰點數對帳邏輯 (全新加入)
+# 💰 功能 C：和泰點數對帳邏輯 (動態標題列修正版)
 # ==========================================
 def process_points(file_a_upload, file_b_upload):
     output_buffer = io.BytesIO()
@@ -386,19 +387,29 @@ def process_points(file_a_upload, file_b_upload):
         file_b_upload.seek(0)
         
         logs.append("📂 正在讀取【CMX 訂單報表 (附件一)】...")
-        # 預設使用 header=2 讀取 CMX 報表
-        df_a = pd.read_excel(file_a_upload, header=2)
-        df_a.columns = df_a.columns.str.strip()
         
-        if '訂單編號' not in df_a.columns:
-            logs.append("⚠️ 警告：找不到訂單編號，嘗試切換表頭讀取模式...")
-            file_a_upload.seek(0)
-            df_a = pd.read_excel(file_a_upload, header=1)
-            df_a.columns = df_a.columns.str.strip()
+        # --- ⭐️ 核心修正：動態掃描附件一的標題列位置 ---
+        df_temp = pd.read_excel(file_a_upload, header=None, nrows=20)
+        header_idx = 0
+        for i, row in df_temp.iterrows():
+            row_vals = [str(x).strip() for x in row.values if pd.notna(x)]
+            if '和泰點數' in row_vals or '訂單編號' in row_vals:
+                header_idx = i
+                break
+                
+        file_a_upload.seek(0)
+        df_a = pd.read_excel(file_a_upload, header=header_idx)
+        df_a.columns = df_a.columns.astype(str).str.strip()
+        
+        if '和泰點數' not in df_a.columns:
+            logs.append(f"❌ 錯誤：無法在附件一中找到「和泰點數」欄位 (系統判定標題在第 {header_idx+1} 列)。請確認報表格式！")
+            return None, logs, 0, None
+            
+        logs.append(f"   ↳ 成功鎖定 A 表標題列於第 {header_idx+1} 列")
 
         logs.append("📂 正在讀取【特約商點數歷程 (附件二)】...")
         df_b = pd.read_excel(file_b_upload)
-        df_b.columns = df_b.columns.str.strip()
+        df_b.columns = df_b.columns.astype(str).str.strip()
         
         # --- 處理附件一 ---
         logs.append("🧹 正在清理附件一：過濾已退款與負點數資料...")
@@ -416,7 +427,6 @@ def process_points(file_a_upload, file_b_upload):
         
         # --- 比對資料 ---
         logs.append("🔄 正在進行比對 (Outer Join)...")
-        # 挑選附件一要顯示的必要欄位
         cols_to_keep = ['訂單編號', '和泰點數']
         if '訂單建立時間' in df_a_clean.columns: cols_to_keep.append('訂單建立時間')
         if '總金額' in df_a_clean.columns: cols_to_keep.append('總金額')
@@ -432,7 +442,6 @@ def process_points(file_a_upload, file_b_upload):
         # 整理輸出格式
         discrepancies = merged[merged['差異(附件一減附件二)'] != 0].copy()
         
-        # 確保順序一致
         final_cols = ['比對單號(訂單編號)']
         if '訂單建立時間' in merged.columns: final_cols.append('訂單建立時間')
         if '總金額' in merged.columns: final_cols.append('總金額')
@@ -456,18 +465,15 @@ def process_points(file_a_upload, file_b_upload):
             ws_diff = writer.sheets['點數比對差異清單']
             ws_all = writer.sheets['完整比對總表']
             
-            # 定義樣式
             fmt_header = workbook.add_format({'bold': True, 'bg_color': '#333F4F', 'font_color': 'white', 'border': 1, 'align': 'center'})
             fmt_content = workbook.add_format({'border': 1, 'align': 'center'})
             fmt_red_text = workbook.add_format({'font_color': '#C00000', 'bold': True})
             
-            # 套用標題與欄寬
             for sheet, df_ref in [(ws_diff, discrepancies), (ws_all, merged_sorted)]:
                 sheet.set_column(0, len(df_ref.columns)-1, 20)
                 for col_num, value in enumerate(df_ref.columns.values):
                     sheet.write(0, col_num, value, fmt_header)
                 
-                # 若為差異欄位(最後一欄)且不等於0，將文字標紅
                 diff_col_idx = len(df_ref.columns) - 1
                 sheet.conditional_format(1, diff_col_idx, len(df_ref), diff_col_idx, 
                                          {'type': 'cell', 'criteria': '!=', 'value': 0, 'format': fmt_red_text})
@@ -559,7 +565,7 @@ elif mode == "📺 LiTV 對帳 (Code B)":
 
 elif mode == "💰 和泰點數對帳 (Code C)":
     st.header("💰 和泰點數對帳")
-    st.info("💡 邏輯：自動排除 A 表退款與負點數、合併 B 表拆分紀錄，並篩除 B 表點數交易取消的項目進行比對。")
+    st.info("💡 邏輯：自動偵測標題列，排除 A 表退款與負點數、合併 B 表拆分紀錄，並篩除 B 表點數交易取消的項目進行比對。")
     
     col1, col2 = st.columns(2)
     with col1:
