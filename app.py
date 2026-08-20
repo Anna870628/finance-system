@@ -374,7 +374,7 @@ def process_litv(file_a_upload, file_b_upload):
         return None, [f"❌ 程式執行錯誤: {str(e)}"], None, None, None
 
 # ==========================================
-# 💰 功能 C：和泰點數對帳邏輯 (徹底型別防呆版)
+# 💰 功能 C：和泰點數對帳邏輯 (自動正負相抵抵銷版)
 # ==========================================
 def process_points(file_a_upload, file_b_upload):
     output_buffer = io.BytesIO()
@@ -399,7 +399,6 @@ def process_points(file_a_upload, file_b_upload):
         df_a = pd.read_excel(file_a_upload, header=header_idx)
         df_a.columns = df_a.columns.astype(str).str.replace(r'\s+', '', regex=True)
         
-        # 嚴格且精準的標題配對
         col_id = next((c for c in df_a.columns if '訂單編號' in c), None)
         col_pts = next((c for c in df_a.columns if '和泰點數' in c), None)
         if not col_pts:
@@ -415,56 +414,51 @@ def process_points(file_a_upload, file_b_upload):
             logs.append("❌ 錯誤：無法在附件一中找到包含「訂單編號」的欄位。請確認報表格式！")
             return None, logs, 0, None
 
-        rename_dict = {col_id: '訂單編號', col_pts: '和泰點數'}
+        rename_dict = {col_id: '訂單編號', col_pts: '原始_和泰點數'}
         if col_refund:
             rename_dict[col_refund] = '退款時間'
         df_a.rename(columns=rename_dict, inplace=True)
             
-        logs.append(f"   ↳ 成功鎖定 A 表標題列於第 {header_idx+1} 列，並將「{col_pts}」欄位對齊。")
+        logs.append(f"   ↳ 成功鎖定 A 表標題列於第 {header_idx+1} 列。")
 
         logs.append("📂 正在讀取【特約商點數歷程 (附件二)】...")
         df_b = pd.read_excel(file_b_upload)
         df_b.columns = df_b.columns.astype(str).str.replace(r'\s+', '', regex=True)
         
         # --- 處理附件一 ---
-        logs.append("🧹 正在清理附件一：過濾已退款與負點數資料...")
-        df_a['和泰點數'] = pd.to_numeric(df_a['和泰點數'], errors='coerce').fillna(0)
+        logs.append("🧹 計算附件一有效點數：若有退款時間，則「有效和泰點數」視為 0...")
+        df_a['原始_和泰點數'] = pd.to_numeric(df_a['原始_和泰點數'], errors='coerce').fillna(0)
         
         if '退款時間' in df_a.columns:
-            df_a_clean = df_a[df_a['退款時間'].isna() & (df_a['和泰點數'] >= 0)].copy()
+            # 有退款時間就當作 0，否則保留原點數
+            df_a['有效和泰點數'] = np.where(df_a['退款時間'].notna(), 0, df_a['原始_和泰點數'])
         else:
-            df_a_clean = df_a[df_a['和泰點數'] >= 0].copy()
-        
+            df_a['有效和泰點數'] = df_a['原始_和泰點數']
+            
         # --- 處理附件二 ---
-        logs.append("🧹 正在清理附件二：過濾負點數與「點數交易取消」資料，並加總同訂單點數...")
+        logs.append("🧹 處理附件二：保留所有正負點數紀錄，加總同一訂單使其自然相抵...")
         
-        # 嚴格抓取 B 表欄位，避免誤抓「點數中心單號」
         col_b_pts = next((c for c in df_b.columns if '兌點數' in c), None)
-        col_b_type = next((c for c in df_b.columns if '點數交易類型' in c), None)
         col_b_id = next((c for c in df_b.columns if '特約商交易序號' in c), None)
         
         if not col_b_pts or not col_b_id:
-            logs.append(f"❌ 錯誤：附件二缺乏必要欄位（需包含「兌點數」及「特約商交易序號」）。目前抓到的欄位有：{', '.join(df_b.columns[:10])}")
+            logs.append(f"❌ 錯誤：附件二缺乏必要欄位（需包含「兌點數」及「特約商交易序號」）。")
             return None, logs, 0, None
 
         df_b[col_b_pts] = pd.to_numeric(df_b[col_b_pts], errors='coerce').fillna(0)
         
-        if col_b_type in df_b.columns:
-            df_b_clean = df_b[(df_b[col_b_pts] >= 0) & (df_b[col_b_type] != '點數交易取消')].copy()
-        else:
-            df_b_clean = df_b[df_b[col_b_pts] >= 0].copy()
-        
-        # 加總同一筆交易序號的點數
-        df_b_grouped = df_b_clean.groupby(col_b_id, as_index=False)[col_b_pts].sum()
+        # 這裡【不刪除】負數或「點數交易取消」，直接讓它們 Groupby 時正負相加抵銷
+        df_b_grouped = df_b.groupby(col_b_id, as_index=False)[col_b_pts].sum()
         df_b_grouped.rename(columns={col_b_pts: '附件二_總兌點數', col_b_id: '特約商交易序號'}, inplace=True)
         
-        # --- 比對資料 ---
+        # --- 比的外資料 ---
         logs.append("🔄 正在進行比對 (Outer Join)...")
-        cols_to_keep = ['訂單編號', '和泰點數']
-        if '訂單建立時間' in df_a_clean.columns: cols_to_keep.append('訂單建立時間')
-        if '總金額' in df_a_clean.columns: cols_to_keep.append('總金額')
+        cols_to_keep = ['訂單編號', '原始_和泰點數', '有效和泰點數']
+        if '訂單建立時間' in df_a.columns: cols_to_keep.append('訂單建立時間')
+        if '總金額' in df_a.columns: cols_to_keep.append('總金額')
+        if '退款時間' in df_a.columns: cols_to_keep.append('退款時間')
             
-        df_a_subset = df_a_clean[cols_to_keep].copy()
+        df_a_subset = df_a[cols_to_keep].copy()
         
         # 強制轉換字串格式，避免 Float64 Error
         df_a_subset['訂單編號'] = df_a_subset['訂單編號'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
@@ -477,23 +471,29 @@ def process_points(file_a_upload, file_b_upload):
         merged['比對單號(訂單編號)'] = merged['比對單號(訂單編號)'].astype(str).str.replace('nan', '', case=False)
         merged = merged[merged['比對單號(訂單編號)'] != ""]
 
-        merged['和泰點數'] = merged['和泰點數'].fillna(0)
+        merged['有效和泰點數'] = merged['有效和泰點數'].fillna(0)
         merged['附件二_總兌點數'] = merged['附件二_總兌點數'].fillna(0)
-        merged['差異(附件一減附件二)'] = merged['和泰點數'] - merged['附件二_總兌點數']
         
-        # 整理輸出格式
-        discrepancies = merged[merged['差異(附件一減附件二)'] != 0].copy()
+        # 計算最終差異：有效點數 - 附件二相加後的總點數
+        merged['差異(有效點數減附件二)'] = merged['有效和泰點數'] - merged['附件二_總兌點數']
+        
+        # 整理輸出格式 (只抓差異不為 0 的)
+        discrepancies = merged[merged['差異(有效點數減附件二)'] != 0].copy()
         
         final_cols = ['比對單號(訂單編號)']
         if '訂單建立時間' in merged.columns: final_cols.append('訂單建立時間')
         if '總金額' in merged.columns: final_cols.append('總金額')
-        final_cols.extend(['和泰點數', '附件二_總兌點數', '差異(附件一減附件二)'])
+        if '退款時間' in merged.columns: final_cols.append('退款時間')
+        
+        final_cols.extend(['原始_和泰點數', '有效和泰點數', '附件二_總兌點數', '差異(有效點數減附件二)'])
         
         discrepancies = discrepancies[final_cols].copy()
-        discrepancies.rename(columns={'和泰點數': '附件一_和泰點數', '總金額': '附件一_總金額'}, inplace=True)
-        
         merged_sorted = merged[final_cols].copy()
-        merged_sorted.rename(columns={'和泰點數': '附件一_和泰點數', '總金額': '附件一_總金額'}, inplace=True)
+        
+        # 重新命名以便閱讀
+        rename_map = {'原始_和泰點數': '附件一_原始和泰點數', '總金額': '附件一_總金額', '有效和泰點數': '附件一_有效和泰點數'}
+        discrepancies.rename(columns=rename_map, inplace=True)
+        merged_sorted.rename(columns=rename_map, inplace=True)
         
         diff_count = len(discrepancies)
         logs.append(f"✅ 比對完成！共發現 {diff_count} 筆點數出入。")
@@ -512,7 +512,7 @@ def process_points(file_a_upload, file_b_upload):
             fmt_red_text = workbook.add_format({'font_color': '#C00000', 'bold': True})
             
             for sheet, df_ref in [(ws_diff, discrepancies), (ws_all, merged_sorted)]:
-                sheet.set_column(0, len(df_ref.columns)-1, 20)
+                sheet.set_column(0, len(df_ref.columns)-1, 18)
                 for col_num, value in enumerate(df_ref.columns.values):
                     sheet.write(0, col_num, value, fmt_header)
                 
@@ -606,7 +606,7 @@ elif mode == "📺 LiTV 對帳 (Code B)":
 
 elif mode == "💰 和泰點數對帳 (Code C)":
     st.header("💰 和泰點數對帳")
-    st.info("💡 邏輯：自動偵測標題列，排除 A 表退款與負點數、合併 B 表拆分紀錄，並篩除 B 表點數交易取消的項目進行比對。")
+    st.info("💡 邏輯：附件二的正負點數自然相抵，若相加為 0，且附件一同訂單有退款時間，系統視為無差異並自動過濾。")
     
     col1, col2 = st.columns(2)
     with col1:
