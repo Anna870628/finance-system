@@ -374,7 +374,7 @@ def process_litv(file_a_upload, file_b_upload):
         return None, [f"❌ 程式執行錯誤: {str(e)}"], None, None, None
 
 # ==========================================
-# 💰 功能 C：和泰點數對帳邏輯 (終極防呆容錯版)
+# 💰 功能 C：和泰點數對帳邏輯 (徹底型別防呆版)
 # ==========================================
 def process_points(file_a_upload, file_b_upload):
     output_buffer = io.BytesIO()
@@ -387,28 +387,22 @@ def process_points(file_a_upload, file_b_upload):
         
         logs.append("📂 正在讀取【CMX 訂單報表 (附件一)】...")
         
-        # --- ⭐️ 核心修正：動態掃描附件一的標題列位置 ---
         df_temp = pd.read_excel(file_a_upload, header=None, nrows=20)
         header_idx = 0
         for i, row in df_temp.iterrows():
             row_vals = [str(x).strip() for x in row.values if pd.notna(x)]
-            # 若該列包含「訂單」相關字眼，且包含「金額」或「點數」，極大機率是標題列
             if any('訂單' in x for x in row_vals) and (any('金額' in x for x in row_vals) or any('點數' in x for x in row_vals)):
                 header_idx = i
                 break
                 
         file_a_upload.seek(0)
         df_a = pd.read_excel(file_a_upload, header=header_idx)
-        
-        # 移除欄位名稱中的所有不可見空白 (極端容錯)
         df_a.columns = df_a.columns.astype(str).str.replace(r'\s+', '', regex=True)
         
-        # 動態抓取對應欄位 (模糊比對，不怕欄位名稱微調)
         col_id = next((c for c in df_a.columns if '訂單' in c and '編號' in c), None)
         col_pts = next((c for c in df_a.columns if '點數' in c), None)
         col_refund = next((c for c in df_a.columns if '退款' in c), None)
         
-        # 檢核是否上傳錯誤檔案 (防呆機制)
         if not col_pts:
             sample_cols = ", ".join(df_a.columns.tolist()[:5])
             logs.append(f"❌ 錯誤：無法在附件一中找到包含「點數」的欄位。(抓到的欄位：{sample_cols}...)\n💡 防呆提示：請確認您是否不小心將「洗車」或「LiTV」的報表上傳到點數對帳區了？")
@@ -418,7 +412,6 @@ def process_points(file_a_upload, file_b_upload):
             logs.append("❌ 錯誤：無法在附件一中找到包含「訂單編號」的欄位。請確認報表格式！")
             return None, logs, 0, None
 
-        # 為了後續邏輯統一，將找到的欄位統一名稱
         rename_dict = {col_id: '訂單編號', col_pts: '和泰點數'}
         if col_refund:
             rename_dict[col_refund] = '退款時間'
@@ -469,8 +462,17 @@ def process_points(file_a_upload, file_b_upload):
             
         df_a_subset = df_a_clean[cols_to_keep].copy()
         
+        # ⭐️ 核心修正：強制將兩邊的單號轉換成乾淨的字串，避免 float64 與 str 合併報錯
+        df_a_subset['訂單編號'] = df_a_subset['訂單編號'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+        df_b_grouped['特約商交易序號'] = df_b_grouped['特約商交易序號'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+        
         merged = pd.merge(df_a_subset, df_b_grouped, left_on='訂單編號', right_on='特約商交易序號', how='outer')
         merged['比對單號(訂單編號)'] = merged['訂單編號'].combine_first(merged['特約商交易序號'])
+        
+        # 把合併後因為兩邊沒有配對到而產生的 NaN 濾掉
+        merged['比對單號(訂單編號)'] = merged['比對單號(訂單編號)'].astype(str).str.replace('nan', '', case=False)
+        merged = merged[merged['比對單號(訂單編號)'] != ""]
+
         merged['和泰點數'] = merged['和泰點數'].fillna(0)
         merged['附件二_總兌點數'] = merged['附件二_總兌點數'].fillna(0)
         merged['差異(附件一減附件二)'] = merged['和泰點數'] - merged['附件二_總兌點數']
