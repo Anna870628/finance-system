@@ -399,9 +399,12 @@ def process_points(file_a_upload, file_b_upload):
         df_a = pd.read_excel(file_a_upload, header=header_idx)
         df_a.columns = df_a.columns.astype(str).str.replace(r'\s+', '', regex=True)
         
-        col_id = next((c for c in df_a.columns if '訂單' in c and '編號' in c), None)
-        col_pts = next((c for c in df_a.columns if '點數' in c), None)
-        col_refund = next((c for c in df_a.columns if '退款' in c), None)
+        # 嚴格且精準的標題配對
+        col_id = next((c for c in df_a.columns if '訂單編號' in c), None)
+        col_pts = next((c for c in df_a.columns if '和泰點數' in c), None)
+        if not col_pts:
+            col_pts = next((c for c in df_a.columns if '點數' in c), None)
+        col_refund = next((c for c in df_a.columns if '退款時間' in c), None)
         
         if not col_pts:
             sample_cols = ", ".join(df_a.columns.tolist()[:5])
@@ -435,12 +438,13 @@ def process_points(file_a_upload, file_b_upload):
         # --- 處理附件二 ---
         logs.append("🧹 正在清理附件二：過濾負點數與「點數交易取消」資料，並加總同訂單點數...")
         
-        col_b_pts = next((c for c in df_b.columns if '兌點' in c or '點數' in c), '兌點數')
-        col_b_type = next((c for c in df_b.columns if '交易類型' in c or '狀態' in c), '點數交易類型')
-        col_b_id = next((c for c in df_b.columns if '交易序號' in c or '單號' in c), '特約商交易序號')
+        # 嚴格抓取 B 表欄位，避免誤抓「點數中心單號」
+        col_b_pts = next((c for c in df_b.columns if '兌點數' in c), None)
+        col_b_type = next((c for c in df_b.columns if '點數交易類型' in c), None)
+        col_b_id = next((c for c in df_b.columns if '特約商交易序號' in c), None)
         
-        if col_b_pts not in df_b.columns or col_b_id not in df_b.columns:
-            logs.append(f"❌ 錯誤：附件二缺乏必要欄位，目前欄位有：{', '.join(df_b.columns[:5])}")
+        if not col_b_pts or not col_b_id:
+            logs.append(f"❌ 錯誤：附件二缺乏必要欄位（需包含「兌點數」及「特約商交易序號」）。目前抓到的欄位有：{', '.join(df_b.columns[:10])}")
             return None, logs, 0, None
 
         df_b[col_b_pts] = pd.to_numeric(df_b[col_b_pts], errors='coerce').fillna(0)
@@ -462,14 +466,14 @@ def process_points(file_a_upload, file_b_upload):
             
         df_a_subset = df_a_clean[cols_to_keep].copy()
         
-        # ⭐️ 核心修正：強制將兩邊的單號轉換成乾淨的字串，避免 float64 與 str 合併報錯
+        # 強制轉換字串格式，避免 Float64 Error
         df_a_subset['訂單編號'] = df_a_subset['訂單編號'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
         df_b_grouped['特約商交易序號'] = df_b_grouped['特約商交易序號'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
         
         merged = pd.merge(df_a_subset, df_b_grouped, left_on='訂單編號', right_on='特約商交易序號', how='outer')
         merged['比對單號(訂單編號)'] = merged['訂單編號'].combine_first(merged['特約商交易序號'])
         
-        # 把合併後因為兩邊沒有配對到而產生的 NaN 濾掉
+        # 移除未配對的空值
         merged['比對單號(訂單編號)'] = merged['比對單號(訂單編號)'].astype(str).str.replace('nan', '', case=False)
         merged = merged[merged['比對單號(訂單編號)'] != ""]
 
