@@ -438,20 +438,28 @@ def process_points(file_a_upload, file_b_upload):
         # --- 處理附件二 ---
         logs.append("🧹 處理附件二：保留所有正負點數紀錄，加總同一訂單使其自然相抵...")
         
-        col_b_pts = next((c for c in df_b.columns if '兌點數' in c), None)
         col_b_id = next((c for c in df_b.columns if '特約商交易序號' in c), None)
         
-        if not col_b_pts or not col_b_id:
-            logs.append(f"❌ 錯誤：附件二缺乏必要欄位（需包含「兌點數」及「特約商交易序號」）。")
+        # 分別尋找舊點與新點欄位
+        col_b_old_pts = next((c for c in df_b.columns if '兌點舊點' in c), None)
+        col_b_new_pts = next((c for c in df_b.columns if '兌換新點' in c), None)
+        
+        if not col_b_id or (not col_b_old_pts and not col_b_new_pts):
+            logs.append(f"❌ 錯誤：附件二缺乏必要欄位（需包含「特約商交易序號」以及「兌點舊點」或「兌換新點」）。")
             return None, logs, 0, None
 
-        df_b[col_b_pts] = pd.to_numeric(df_b[col_b_pts], errors='coerce').fillna(0)
+        # 建立一個新欄位來存放加總後的總點數
+        df_b['附件二_總兌點數'] = 0
+        if col_b_old_pts:
+            df_b['附件二_總兌點數'] += pd.to_numeric(df_b[col_b_old_pts], errors='coerce').fillna(0)
+        if col_b_new_pts:
+            df_b['附件二_總兌點數'] += pd.to_numeric(df_b[col_b_new_pts], errors='coerce').fillna(0)
         
         # 這裡【不刪除】負數或「點數交易取消」，直接讓它們 Groupby 時正負相加抵銷
-        df_b_grouped = df_b.groupby(col_b_id, as_index=False)[col_b_pts].sum()
-        df_b_grouped.rename(columns={col_b_pts: '附件二_總兌點數', col_b_id: '特約商交易序號'}, inplace=True)
+        df_b_grouped = df_b.groupby(col_b_id, as_index=False)['附件二_總兌點數'].sum()
+        df_b_grouped.rename(columns={col_b_id: '特約商交易序號'}, inplace=True)
         
-        # --- 比的外資料 ---
+        # --- 比對資料 ---
         logs.append("🔄 正在進行比對 (Outer Join)...")
         cols_to_keep = ['訂單編號', '原始_和泰點數', '有效和泰點數']
         if '訂單建立時間' in df_a.columns: cols_to_keep.append('訂單建立時間')
