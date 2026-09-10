@@ -12,9 +12,6 @@ from datetime import datetime
 # 輔助函式：手機號碼格式化
 # ==========================================
 def normalize_phone(val):
-    """
-    將手機號碼轉為字串，去除 .0，並確保 09 開頭
-    """
     if pd.isna(val) or val == "":
         return ""
     
@@ -70,8 +67,8 @@ def process_car_wash(files_wash_a, files_3in1_a, file_billing_upload, match_mode
             df_list = []
             for f in file_list:
                 f.seek(0)
-                # 讀取並自動過濾掉「全為空值」的列，防止 Excel 虛胖撐爆記憶體
-                df_temp = pd.read_excel(f, sheet_name=0, header=2).dropna(how='all')
+                # 使用 calamine 引擎並清除空白列，防爆記憶體
+                df_temp = pd.read_excel(f, sheet_name=0, header=2, engine='calamine').dropna(how='all')
                 df_list.append(df_temp)
                 logs.append(f"   ↳ 成功讀取: {f.name} ({len(df_temp)} 筆)")
                 
@@ -117,6 +114,7 @@ def process_car_wash(files_wash_a, files_3in1_a, file_billing_upload, match_mode
              logs.append("   ⚠️ 已啟用新制：A表比對鍵轉換為【手機後7碼-車牌】格式")
 
         logs.append(f"📂 正在讀取右側檔案 (請款明細/B表)...")
+        # B表這裡我們不用 calamine，因為要讀取 sheet_names
         xls_b = pd.ExcelFile(file_billing_upload)
         available_sheets = xls_b.sheet_names
         
