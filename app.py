@@ -70,7 +70,8 @@ def process_car_wash(files_wash_a, files_3in1_a, file_billing_upload, match_mode
             df_list = []
             for f in file_list:
                 f.seek(0)
-                df_temp = pd.read_excel(f, sheet_name=0, header=2)
+                # 讀取並自動過濾掉「全為空值」的列，防止 Excel 虛胖撐爆記憶體
+                df_temp = pd.read_excel(f, sheet_name=0, header=2).dropna(how='all')
                 df_list.append(df_temp)
                 logs.append(f"   ↳ 成功讀取: {f.name} ({len(df_temp)} 筆)")
                 
@@ -374,7 +375,7 @@ def process_litv(file_a_upload, file_b_upload):
         return None, [f"❌ 程式執行錯誤: {str(e)}"], None, None, None
 
 # ==========================================
-# 💰 功能 C：和泰點數對帳邏輯 (自動正負相抵抵銷版)
+# 💰 功能 C：和泰點數對帳邏輯
 # ==========================================
 def process_points(file_a_upload, file_b_upload):
     output_buffer = io.BytesIO()
@@ -430,7 +431,6 @@ def process_points(file_a_upload, file_b_upload):
         df_a['原始_和泰點數'] = pd.to_numeric(df_a['原始_和泰點數'], errors='coerce').fillna(0)
         
         if '退款時間' in df_a.columns:
-            # 有退款時間就當作 0，否則保留原點數
             df_a['有效和泰點數'] = np.where(df_a['退款時間'].notna(), 0, df_a['原始_和泰點數'])
         else:
             df_a['有效和泰點數'] = df_a['原始_和泰點數']
@@ -440,7 +440,6 @@ def process_points(file_a_upload, file_b_upload):
         
         col_b_id = next((c for c in df_b.columns if '特約商交易序號' in c), None)
         
-        # 分別尋找舊點與新點欄位
         col_b_old_pts = next((c for c in df_b.columns if '兌點舊點' in c), None)
         col_b_new_pts = next((c for c in df_b.columns if '兌換新點' in c), None)
         
@@ -448,14 +447,12 @@ def process_points(file_a_upload, file_b_upload):
             logs.append(f"❌ 錯誤：附件二缺乏必要欄位（需包含「特約商交易序號」以及「兌點舊點」或「兌換新點」）。")
             return None, logs, 0, None
 
-        # 建立一個新欄位來存放加總後的總點數
         df_b['附件二_總兌點數'] = 0
         if col_b_old_pts:
             df_b['附件二_總兌點數'] += pd.to_numeric(df_b[col_b_old_pts], errors='coerce').fillna(0)
         if col_b_new_pts:
             df_b['附件二_總兌點數'] += pd.to_numeric(df_b[col_b_new_pts], errors='coerce').fillna(0)
         
-        # 這裡【不刪除】負數或「點數交易取消」，直接讓它們 Groupby 時正負相加抵銷
         df_b_grouped = df_b.groupby(col_b_id, as_index=False)['附件二_總兌點數'].sum()
         df_b_grouped.rename(columns={col_b_id: '特約商交易序號'}, inplace=True)
         
@@ -468,24 +465,20 @@ def process_points(file_a_upload, file_b_upload):
             
         df_a_subset = df_a[cols_to_keep].copy()
         
-        # 強制轉換字串格式，避免 Float64 Error
         df_a_subset['訂單編號'] = df_a_subset['訂單編號'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
         df_b_grouped['特約商交易序號'] = df_b_grouped['特約商交易序號'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
         
         merged = pd.merge(df_a_subset, df_b_grouped, left_on='訂單編號', right_on='特約商交易序號', how='outer')
         merged['比對單號(訂單編號)'] = merged['訂單編號'].combine_first(merged['特約商交易序號'])
         
-        # 移除未配對的空值
         merged['比對單號(訂單編號)'] = merged['比對單號(訂單編號)'].astype(str).str.replace('nan', '', case=False)
         merged = merged[merged['比對單號(訂單編號)'] != ""]
 
         merged['有效和泰點數'] = merged['有效和泰點數'].fillna(0)
         merged['附件二_總兌點數'] = merged['附件二_總兌點數'].fillna(0)
         
-        # 計算最終差異：有效點數 - 附件二相加後的總點數
         merged['差異(有效點數減附件二)'] = merged['有效和泰點數'] - merged['附件二_總兌點數']
         
-        # 整理輸出格式 (只抓差異不為 0 的)
         discrepancies = merged[merged['差異(有效點數減附件二)'] != 0].copy()
         
         final_cols = ['比對單號(訂單編號)']
@@ -498,7 +491,6 @@ def process_points(file_a_upload, file_b_upload):
         discrepancies = discrepancies[final_cols].copy()
         merged_sorted = merged[final_cols].copy()
         
-        # 重新命名以便閱讀
         rename_map = {'原始_和泰點數': '附件一_原始和泰點數', '總金額': '附件一_總金額', '有效和泰點數': '附件一_有效和泰點數'}
         discrepancies.rename(columns=rename_map, inplace=True)
         merged_sorted.rename(columns=rename_map, inplace=True)
@@ -533,6 +525,7 @@ def process_points(file_a_upload, file_b_upload):
     except Exception as e:
         import traceback
         return None, [f"❌ 程式執行錯誤: {str(e)}", traceback.format_exc()], 0, None
+
 
 # ==========================================
 # 介面顯示邏輯
