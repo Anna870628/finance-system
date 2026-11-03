@@ -421,7 +421,18 @@ def process_points(file_a_upload, file_b_upload):
         logs.append(f"   ↳ 成功鎖定 A 表標題列於第 {header_idx+1} 列。")
 
         logs.append("📂 正在讀取【特約商點數歷程 (附件二)】...")
-        df_b = pd.read_excel(file_b_upload)
+        
+        # 修正：動態尋找附件二的真實標題列
+        df_b_temp = pd.read_excel(file_b_upload, header=None, nrows=20)
+        header_b_idx = 0
+        for i, row in df_b_temp.iterrows():
+            row_vals = [str(x).strip() for x in row.values if pd.notna(x)]
+            if any('特約商交易序號' in x for x in row_vals):
+                header_b_idx = i
+                break
+                
+        file_b_upload.seek(0)
+        df_b = pd.read_excel(file_b_upload, header=header_b_idx)
         df_b.columns = df_b.columns.astype(str).str.replace(r'\s+', '', regex=True)
         
         # --- 處理附件一 ---
